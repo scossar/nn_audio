@@ -1,4 +1,5 @@
 #include "m_pd.h"
+#include <math.h>
 #include <stdbool.h>
 
 #define MAX_FEATURES 256
@@ -8,9 +9,16 @@ typedef struct _linreg {
 
   int x_num_inputs;
   t_float *x_weights; // feature weights
-  t_float *x_dw; // weight derivatives
+  t_float *x_dw; // weight derivatives  (not being used)
+  t_float *x_v_dw;
+  t_float *x_s_dw;
+  t_float x_beta_1;
+  t_float x_beta_2;
+  // t_float x_db;
   t_float x_dz; // dz accumulator
   t_float x_bias; // neuron bias
+  t_float x_v_db;
+  t_float x_s_db;
   t_float *x_ring_buffer; // buffer to allow multiple features from a single
   // input signal
   t_float *x_features_buffer; // linear output buffer (rename)
@@ -48,6 +56,7 @@ static t_int *linreg_perform(t_int *w)
   int num_inputs = x->x_num_inputs;
   int batch_size = x->x_batch_size;
   t_float dz = x->x_dz;
+  t_float epsilon = 1e-8;
   // hmmm
   bool buffer_filled = x->x_total_samples_processed >=ring_buffer_size;
 
@@ -73,9 +82,14 @@ static t_int *linreg_perform(t_int *w)
     if (x->x_batch_count == batch_size) {
       for (int i = 0; i < num_inputs; i++) {
         t_float dw = dz * x->x_features_buffer[i] + x->x_lambda * x->x_weights[i];
-        x->x_weights[i] -= alpha * dw;
+        x->x_v_dw[i] = x->x_beta_1 * x->x_v_dw[i] + (1 - x->x_beta_1) * dw;
+        x->x_s_dw[i] = x->x_beta_2 * x->x_s_dw[i] + (1 - x->x_beta_2) * dw * dw;
+        x->x_weights[i] -= alpha * x->x_v_dw[i] / sqrt(x->x_s_dw[i] + epsilon);
       }
-      x->x_bias -= alpha * dz;
+      // dz == db
+      x->x_v_db = x->x_beta_1 * x->x_v_db + (1 - x->x_beta_1) * dz;
+      x->x_s_db = x->x_beta_2 * x->x_s_db + (1 - x->x_beta_2) * dz * dz;
+      x->x_bias -= alpha * x->x_v_db / sqrt(x->x_s_db + epsilon);
       x->x_batch_count = 0;
       dz = 0.0f;
     }
@@ -111,6 +125,18 @@ static int linreg_initialize_weights(t_linreg *x)
   x->x_dw = (t_float *)getbytes(sizeof(t_float) * x->x_num_inputs);
   if (x->x_dw == NULL) {
     pd_error(x, "linreg~: failed to allocate memory for dw");
+    return 0;
+  }
+
+  x->x_s_dw = (t_float *)getbytes(sizeof(t_float) * x->x_num_inputs);
+  if (x->x_s_dw == NULL) {
+    pd_error(x, "linreg~: failed to allocate memory for x_s_dw");
+    return 0;
+  }
+
+  x->x_v_dw = (t_float *)getbytes(sizeof(t_float) * x->x_num_inputs);
+  if (x->x_v_dw == NULL) {
+    pd_error(x, "linreg~: failed to allocate memory for x_v_dw");
     return 0;
   }
 
@@ -187,6 +213,16 @@ static void linreg_free(t_linreg *x)
     x->x_dw = NULL;
   }
 
+  if (x->x_v_dw != NULL) {
+    freebytes(x->x_v_dw, x->x_num_inputs * sizeof(t_float));
+    x->x_v_dw = NULL;
+  }
+
+  if (x->x_s_dw != NULL) {
+    freebytes(x->x_s_dw, x->x_num_inputs * sizeof(t_float));
+    x->x_s_dw = NULL;
+  }
+
   if (x->x_ring_buffer != NULL) {
     freebytes(x->x_ring_buffer, x->x_ring_buffer_size * sizeof(t_float));
     x->x_ring_buffer = NULL;
@@ -241,7 +277,12 @@ static void *linreg_new(t_symbol *s, int argc, t_atom *argv)
   x->x_bias = 0.0f; // initial value
   x->x_dz = 0.0f;
   x->batch_size_reciprocal = 1.0f / x->x_batch_size;
-  x->x_lambda = 0.01; // default
+  x->x_lambda = 0.01f; // default
+  // x->x_db = 0.0f;
+  x->x_v_db = 0.0f;
+  x->x_s_db = 0.0f;
+  x->x_beta_1 = 0.9f;
+  x->x_beta_2 = 0.999f;
 
   x->x_samp_buffer_size = sys_getblksize();
 
