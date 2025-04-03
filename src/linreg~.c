@@ -1,4 +1,5 @@
 #include "m_pd.h"
+#include <stdbool.h>
 
 #define MAX_FEATURES 256
 
@@ -7,14 +8,21 @@ typedef struct _linreg {
 
   int x_num_inputs;
   t_float *x_weights;
+  t_float x_dz;
+  t_float *x_dw;
   t_float *x_ring_buffer;
   t_float *x_features_buffer;
+  t_float x_bias;
+  t_float x_db;
+  t_float x_alpha;
+  int x_batch_size;
+  int x_batch_count;
+  int x_total_samples_processed;
+  t_float batch_size_reciprocal;
   int x_ring_pos;
   int x_ring_buffer_size;
   int x_samp_buffer_size;
   int x_buffer_mask;
-  t_float x_bias;
-  t_float x_alpha;
 
   t_inlet *x_y_inlet;
 } t_linreg;
@@ -34,8 +42,14 @@ static t_int *linreg_perform(t_int *w)
   int mask = x->x_buffer_mask;
   t_float alpha = x->x_alpha;
   int num_inputs = x->x_num_inputs;
+  int batch_size = x->x_batch_size;
+  t_float dz = x->x_dz;
+  bool buffer_filled = x->x_total_samples_processed >=ring_buffer_size;
 
   while (n--) {
+    x->x_batch_count++;
+    x->x_total_samples_processed++;
+
     t_float x_in = *in_x++;
     t_float y_in = *in_y++;
 
@@ -48,13 +62,19 @@ static t_int *linreg_perform(t_int *w)
       z += x->x_features_buffer[i] * x->x_weights[i];
     }
 
-    t_float dz = z - y_in;
-    for (int i = 0; i < num_inputs; i++) {
-      x->x_weights[i] -= alpha * dz * x->x_features_buffer[i];
+    if (buffer_filled) {
+      dz += (z - y_in) * x->batch_size_reciprocal;
     }
-    x->x_bias -= alpha * dz;
 
     pos = (pos + 1) & mask;
+    if (buffer_filled && x->x_batch_count == batch_size) {
+      for (int i = 0; i < num_inputs; i++) {
+        x->x_weights[i] -= alpha * dz * x->x_features_buffer[i];
+      }
+      x->x_bias -= alpha * dz;
+      x->x_batch_count = 0;
+      dz = 0.0f;
+    }
     *out++ = z;
   }
 
@@ -81,6 +101,12 @@ static int linreg_initialize_weights(t_linreg *x)
   x->x_weights = (t_float *)getbytes(sizeof(t_float) * x->x_num_inputs);
   if (x->x_weights == NULL) {
     pd_error(x, "linreg~: failed to allocate memory for weights");
+    return 0;
+  }
+
+  x->x_dw = (t_float *)getbytes(sizeof(t_float) * x->x_num_inputs);
+  if (x->x_dw == NULL) {
+    pd_error(x, "linreg~: failed to allocate memory for dw");
     return 0;
   }
 
@@ -137,6 +163,7 @@ static void linreg_reset_params(t_linreg *x)
   }
 
   x->x_bias = 0.0f;
+  x->x_dz = 0.0f;
 }
 
 static void linreg_free(t_linreg *x)
@@ -144,6 +171,11 @@ static void linreg_free(t_linreg *x)
   if (x->x_weights != NULL) {
     freebytes(x->x_weights, x->x_num_inputs * sizeof(t_float));
     x->x_weights = NULL;
+  }
+
+  if (x->x_dw != NULL) {
+    freebytes(x->x_dw, x->x_num_inputs * sizeof(t_float));
+    x->x_dw = NULL;
   }
 
   if (x->x_ring_buffer != NULL) {
@@ -161,13 +193,44 @@ static void linreg_free(t_linreg *x)
   }
 }
 
-static void *linreg_new(t_floatarg f)
+static void *linreg_new(t_symbol *s, int argc, t_atom *argv)
 {
   t_linreg *x = (t_linreg *)pd_new(linreg_class);
 
-  x->x_num_inputs = (f <= 256) ? f : 256; // todo: print warning if exceeded
+  int num_inputs = 1;
+  int batch_size = 1;
+  switch (argc) {
+    case 1:
+      num_inputs = atom_getint(&argv[0]);
+      if (num_inputs <= 256) {
+        break;
+      } else {
+        num_inputs = 256;
+        pd_error(x, "linreg~: number of inputs has been set to the maximum value of 256");
+        break;
+      }
+    case 2:
+      num_inputs = atom_getint(&argv[0]);
+      if (num_inputs > 256) {
+        num_inputs = 256;
+        pd_error(x, "linreg~: number of inputs has been set to the maximum value of 256");
+      }
+      batch_size = atom_getint(&argv[1]);
+      if (batch_size < 1) {
+        batch_size = 1;
+        pd_error("linreg~: batch size has been set to the minimum value of 1");
+      }
+      break;
+    default:
+      break;
+  }
+
+  x->x_batch_count = 0;
+  x->x_total_samples_processed = 0;
   x->x_alpha = 0.0001f; // default;
   x->x_bias = 0.0f; // initial value
+  x->x_dz = 0.0f;
+  x->batch_size_reciprocal = 1 / x->x_batch_size;
 
   x->x_samp_buffer_size = sys_getblksize();
 
