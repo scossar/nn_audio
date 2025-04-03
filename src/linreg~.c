@@ -1,7 +1,6 @@
 #include "m_pd.h"
 
-// this can be (somewhat reliably) return with `sys_getblksize()` ?
-// #define BLOCK_SIZE = (int)64 // hardcoded for now
+#define MAX_FEATURES 256
 
 typedef struct _linreg {
   t_object x_obj;
@@ -9,6 +8,7 @@ typedef struct _linreg {
   int x_num_inputs;
   t_float *x_weights;
   t_float *x_ring_buffer;
+  t_float *x_features_buffer;
   int x_ring_pos;
   int x_ring_buffer_size;
   int x_samp_buffer_size;
@@ -21,53 +21,6 @@ typedef struct _linreg {
 
 static t_class *linreg_class = NULL;
 
-static t_int *linreg_perform_4(t_int *w)
-{
-  t_linreg *x = (t_linreg *)(w[1]);
-  t_sample *in_x = (t_float *)(w[2]);
-  t_sample *in_y = (t_float *)(w[3]);
-  t_sample *out = (t_float *)(w[4]);
-  int n = (int)(w[5]);
-  int pos = x->x_ring_pos;
-  int samp_buffer_size = x->x_samp_buffer_size;
-  int ring_buffer_size = x->x_ring_buffer_size;
-  int mask = x->x_buffer_mask;
-  t_float alpha = x->x_alpha;
-
-  while (n--) {
-    t_float x_in = *in_x++;
-    t_float y_in = *in_y++;
-
-    x->x_ring_buffer[pos] = x_in;
-
-    t_float f0 = x->x_ring_buffer[pos & mask];
-    t_float f1 = x->x_ring_buffer[(pos - samp_buffer_size + ring_buffer_size) & mask];
-    t_float f2 = x->x_ring_buffer[(pos - 2*samp_buffer_size + ring_buffer_size) & mask];
-    t_float f3 = x->x_ring_buffer[(pos - 3*samp_buffer_size + ring_buffer_size) & mask];
-
-    t_float z = x->x_bias +
-      f0 * x->x_weights[0] +
-      f1 * x->x_weights[1] +
-      f2 * x->x_weights[2] +
-      f3 * x->x_weights[3];
-
-    t_float dz = z - y_in;
-    x->x_weights[0] -= alpha * dz * f0;
-    x->x_weights[1] -= alpha * dz * f1;
-    x->x_weights[2] -= alpha * dz * f2;
-    x->x_weights[3] -= alpha * dz * f3;
-    x->x_bias -= alpha * dz;
-
-    pos = (pos + 1) & mask;
-
-    *out++ = z;
-  }
-
-  x->x_ring_pos = pos;
-  return (w+6);
-}
-
-// testing to see how it works with a dynamic number of features
 static t_int *linreg_perform(t_int *w)
 {
   t_linreg *x = (t_linreg *)(w[1]);
@@ -81,7 +34,7 @@ static t_int *linreg_perform(t_int *w)
   int mask = x->x_buffer_mask;
   t_float alpha = x->x_alpha;
   int num_inputs = x->x_num_inputs;
-  
+
   while (n--) {
     t_float x_in = *in_x++;
     t_float y_in = *in_y++;
@@ -89,28 +42,22 @@ static t_int *linreg_perform(t_int *w)
     x->x_ring_buffer[pos] = x_in;
 
     t_float z = x->x_bias;
-    // t_float features[MAX_INPUTS]; // Define a reasonable maximum
-    t_float features[128]; // seems to fail somewhere > 128
-    
-    // Gather features
     for (int i = 0; i < num_inputs; i++) {
       int offset = (pos - i * samp_buffer_size + ring_buffer_size) & mask;
-      features[i] = x->x_ring_buffer[offset];
-      z += features[i] * x->x_weights[i];
+      x->x_features_buffer[i] = x->x_ring_buffer[offset];
+      z += x->x_features_buffer[i] * x->x_weights[i];
     }
-    
-    // Update weights
+
     t_float dz = z - y_in;
     for (int i = 0; i < num_inputs; i++) {
-      x->x_weights[i] -= alpha * dz * features[i];
+      x->x_weights[i] -= alpha * dz * x->x_features_buffer[i];
     }
     x->x_bias -= alpha * dz;
-    
-    // Update position and output
+
     pos = (pos + 1) & mask;
     *out++ = z;
   }
-  
+
   x->x_ring_pos = pos;
   return (w+6);
 }
@@ -137,22 +84,7 @@ static int linreg_initialize_weights(t_linreg *x)
     return 0;
   }
 
-  // x->x_dw = (t_float *)getbytes(sizeof(t_float) * x->x_num_inputs);
-  // if (x->x_dw == NULL) {
-  //   pd_error(x, "linreg~: failed to allocate memory for dw");
-  //   return 0;
-  // }
-
-  for (int i = 0; i < x->x_num_inputs; i++) {
-    x->x_weights[i] = 0.0f;
-  }
-
   return 1;
-}
-
-static void linreg_set_alpha(t_linreg *x, t_floatarg f)
-{
-  x->x_alpha = f;
 }
 
 // see pure_data_linear_regression_audio_object.md (the ring buffer size needs
@@ -160,8 +92,6 @@ static void linreg_set_alpha(t_linreg *x, t_floatarg f)
 static int linreg_initialize_ring_buffer(t_linreg *x)
 {
   int buffer_size = 1;
-  // x->x_samp_buffer_size is the Pd audio buffer size (set in the main init
-  // function)
   while (buffer_size < x->x_num_inputs * x->x_samp_buffer_size) {
     buffer_size *= 2;
   }
@@ -173,15 +103,32 @@ static int linreg_initialize_ring_buffer(t_linreg *x)
     return 0;
   }
 
-  for (int i = 0; i < x->x_ring_buffer_size; i++) {
-    x->x_ring_buffer[i] = 0.0f;
-  }
-
   x->x_ring_pos = 0;
   x->x_buffer_mask = x->x_ring_buffer_size - 1;
 
   return 1;
 }
+
+static int linreg_initialize_features_buffer(t_linreg *x)
+{
+  x->x_features_buffer = (t_float *)getbytes(sizeof(t_float) * MAX_FEATURES);
+  if (x->x_features_buffer == NULL) {
+    pd_error(x, "linreg~: failed to allocate memory to features buffer");
+    return 0;
+  }
+
+  return 1;
+}
+
+static void linreg_set_alpha(t_linreg *x, t_floatarg f)
+{
+  if (f <= 0 || f >= 0.1) {
+    post("linreg~: alpha needs to be in the range (0, 0.1). Setting to 0.0001");
+    f = 0.0001f;
+  }
+  x->x_alpha = f;
+}
+
 
 static void linreg_reset_params(t_linreg *x)
 {
@@ -204,15 +151,21 @@ static void linreg_free(t_linreg *x)
     x->x_ring_buffer = NULL;
   }
 
-  inlet_free(x->x_y_inlet);
+  if (x->x_features_buffer != NULL) {
+    freebytes(x->x_features_buffer, MAX_FEATURES * sizeof(t_float));
+    x->x_features_buffer = NULL;
+  }
+
+  if (x->x_y_inlet != NULL) {
+    inlet_free(x->x_y_inlet);
+  }
 }
 
 static void *linreg_new(t_floatarg f)
 {
   t_linreg *x = (t_linreg *)pd_new(linreg_class);
 
-  // x->x_num_inputs = 4; // hard coded for efficiency 
-  x->x_num_inputs = (f <= 128) ? f : 128; // todo: print warning if exceeded
+  x->x_num_inputs = (f <= 256) ? f : 256; // todo: print warning if exceeded
   x->x_alpha = 0.0001f; // default;
   x->x_bias = 0.0f; // initial value
 
@@ -224,6 +177,11 @@ static void *linreg_new(t_floatarg f)
   }
 
   if (!linreg_initialize_ring_buffer(x)) {
+    linreg_free(x);
+    return NULL;
+  }
+
+  if (!linreg_initialize_features_buffer(x)) {
     linreg_free(x);
     return NULL;
   }
@@ -245,11 +203,10 @@ void linreg_tilde_setup(void)
                            (t_method)linreg_free,
                            sizeof(t_linreg),
                            CLASS_DEFAULT,
-                           A_DEFFLOAT, 0);
+                           A_DEFFLOAT , 0);
 
   class_addmethod(linreg_class, (t_method)linreg_dsp, gensym("dsp"), A_CANT, 0);
   CLASS_MAINSIGNALIN(linreg_class, t_linreg, x_num_inputs);
-
 
   class_addmethod(linreg_class, (t_method)linreg_print_params, gensym("print_params"), 0);
   class_addmethod(linreg_class, (t_method)linreg_reset_params, gensym("clear"), 0);
