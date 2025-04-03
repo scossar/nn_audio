@@ -7,22 +7,26 @@ typedef struct _linreg {
   t_object x_obj;
 
   int x_num_inputs;
-  t_float *x_weights;
-  t_float x_dz;
-  t_float *x_dw;
-  t_float *x_ring_buffer;
-  t_float *x_features_buffer;
-  t_float x_bias;
-  t_float x_db;
-  t_float x_alpha;
+  t_float *x_weights; // feature weights
+  t_float *x_dw; // weight derivatives
+  t_float x_dz; // dz accumulator
+  t_float x_bias; // neuron bias
+  t_float *x_ring_buffer; // buffer to allow multiple features from a single
+  // input signal
+  t_float *x_features_buffer; // linear output buffer (rename)
+
+  t_float x_alpha; // learning rate
+  t_float x_lambda; // L2 regularization hyperparameter
+
   int x_batch_size;
   int x_batch_count;
-  int x_total_samples_processed;
-  t_float batch_size_reciprocal;
-  int x_ring_pos;
+  int x_total_samples_processed; // tracks if the ring buffer has been filled
+  t_float batch_size_reciprocal; // 1/batch_size (to avoid division in while
+  // loop)
+  int x_ring_pos; // current position in ring buffer
   int x_ring_buffer_size;
   int x_samp_buffer_size;
-  int x_buffer_mask;
+  int x_buffer_mask; // for bit mask modulo operation
 
   t_inlet *x_y_inlet;
 } t_linreg;
@@ -44,6 +48,7 @@ static t_int *linreg_perform(t_int *w)
   int num_inputs = x->x_num_inputs;
   int batch_size = x->x_batch_size;
   t_float dz = x->x_dz;
+  // hmmm
   bool buffer_filled = x->x_total_samples_processed >=ring_buffer_size;
 
   while (n--) {
@@ -62,14 +67,13 @@ static t_int *linreg_perform(t_int *w)
       z += x->x_features_buffer[i] * x->x_weights[i];
     }
 
-    if (buffer_filled) {
-      dz += (z - y_in) * x->batch_size_reciprocal;
-    }
+    dz += (z - y_in) * x->batch_size_reciprocal;
 
     pos = (pos + 1) & mask;
-    if (buffer_filled && x->x_batch_count == batch_size) {
+    if (x->x_batch_count == batch_size) {
       for (int i = 0; i < num_inputs; i++) {
-        x->x_weights[i] -= alpha * dz * x->x_features_buffer[i];
+        t_float dw = dz * x->x_features_buffer[i] + x->x_lambda * x->x_weights[i];
+        x->x_weights[i] -= alpha * dw;
       }
       x->x_bias -= alpha * dz;
       x->x_batch_count = 0;
@@ -155,6 +159,11 @@ static void linreg_set_alpha(t_linreg *x, t_floatarg f)
   x->x_alpha = f;
 }
 
+static void linreg_set_lambda(t_linreg *x, t_floatarg f)
+{
+  x->x_lambda = f;
+}
+
 
 static void linreg_reset_params(t_linreg *x)
 {
@@ -199,38 +208,40 @@ static void *linreg_new(t_symbol *s, int argc, t_atom *argv)
 
   int num_inputs = 1;
   int batch_size = 1;
+
   switch (argc) {
     case 1:
       num_inputs = atom_getint(&argv[0]);
-      if (num_inputs <= 256) {
-        break;
-      } else {
-        num_inputs = 256;
-        pd_error(x, "linreg~: number of inputs has been set to the maximum value of 256");
+      if (num_inputs > MAX_FEATURES) {
+        num_inputs = MAX_FEATURES;
         break;
       }
+      break;
     case 2:
       num_inputs = atom_getint(&argv[0]);
-      if (num_inputs > 256) {
-        num_inputs = 256;
-        pd_error(x, "linreg~: number of inputs has been set to the maximum value of 256");
+      if (num_inputs < 1) {
+        num_inputs = 1;
+      } else if (num_inputs > MAX_FEATURES) {
+        num_inputs = MAX_FEATURES;
       }
       batch_size = atom_getint(&argv[1]);
       if (batch_size < 1) {
         batch_size = 1;
-        pd_error("linreg~: batch size has been set to the minimum value of 1");
       }
-      break;
-    default:
-      break;
   }
+
+  x->x_num_inputs = num_inputs;
+  x->x_batch_size = batch_size;
+
+  post("num inputs: %d, batch_size: %d", x->x_num_inputs, x->x_batch_size);
 
   x->x_batch_count = 0;
   x->x_total_samples_processed = 0;
   x->x_alpha = 0.0001f; // default;
   x->x_bias = 0.0f; // initial value
   x->x_dz = 0.0f;
-  x->batch_size_reciprocal = 1 / x->x_batch_size;
+  x->batch_size_reciprocal = 1.0f / x->x_batch_size;
+  x->x_lambda = 0.01; // default
 
   x->x_samp_buffer_size = sys_getblksize();
 
@@ -266,7 +277,7 @@ void linreg_tilde_setup(void)
                            (t_method)linreg_free,
                            sizeof(t_linreg),
                            CLASS_DEFAULT,
-                           A_DEFFLOAT , 0);
+                           A_GIMME, 0);
 
   class_addmethod(linreg_class, (t_method)linreg_dsp, gensym("dsp"), A_CANT, 0);
   CLASS_MAINSIGNALIN(linreg_class, t_linreg, x_num_inputs);
@@ -274,4 +285,5 @@ void linreg_tilde_setup(void)
   class_addmethod(linreg_class, (t_method)linreg_print_params, gensym("print_params"), 0);
   class_addmethod(linreg_class, (t_method)linreg_reset_params, gensym("clear"), 0);
   class_addmethod(linreg_class, (t_method)linreg_set_alpha, gensym("set_alpha"), A_DEFFLOAT, 0);
+  class_addmethod(linreg_class, (t_method)linreg_set_lambda, gensym("set_lambda"), A_DEFFLOAT, 0);
 }
