@@ -193,11 +193,16 @@ static void linreg_set_lambda(t_linreg *x, t_floatarg f)
 
 static void linreg_reset_params(t_linreg *x)
 {
+  // there's a faster way, and there's more to clear
   for (int i = 0; i < x->x_num_inputs; i++) {
     x->x_weights[i] = 0.0f;
+    x->x_v_dw[i] = 0.0f;
+    x->x_s_dw[i] = 0.0f;
   }
 
   x->x_bias = 0.0f;
+  x->x_v_db = 0.0f;
+  x->x_s_db = 0.0f;
   x->x_dz = 0.0f;
 }
 
