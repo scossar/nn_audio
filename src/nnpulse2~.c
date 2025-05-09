@@ -42,7 +42,7 @@ typedef struct _layer {
   t_float *l_da;
 } t_layer;
 
-typedef struct _nnpulse {
+typedef struct _nnpulse2 {
   t_object x_obj;
 
   t_layer *x_layers;
@@ -75,17 +75,17 @@ typedef struct _nnpulse {
   t_inlet *x_label_freq_inlet;
   t_outlet *x_prediction_outlet;
   // t_outlet *x_label_outlet;
-} t_nnpulse;
+} t_nnpulse2;
 
-static t_class *nnpulse_class = NULL;
-static void initialize_layers(t_nnpulse *x);
-static t_float apply_activation(t_nnpulse *x, t_layer *layer, t_float z);
+static t_class *nnpulse2_class = NULL;
+static void initialize_layers(t_nnpulse2 *x);
+static t_float apply_activation(t_nnpulse2 *x, t_layer *layer, t_float z);
 static t_float activation_derivative(t_activation_type activation, t_float z, t_float a, t_float leak);
-static void init_layer_weights(t_nnpulse *x, int l);
-static void init_layer_biases(t_nnpulse *x, int l);
+static void init_layer_weights(t_nnpulse2 *x, int l);
+static void init_layer_biases(t_nnpulse2 *x, int l);
 
-static void *nnpulse_new(void) {
-  t_nnpulse *x = (t_nnpulse *)pd_new(nnpulse_class);
+static void *nnpulse2_new(void) {
+  t_nnpulse2 *x = (t_nnpulse2 *)pd_new(nnpulse2_class);
   x->x_input_features = NULL;
   x->x_layers = NULL;
   x->x_layer_dims = NULL;
@@ -93,7 +93,7 @@ static void *nnpulse_new(void) {
   x->x_num_layers = 6;
   x->x_layer_dims = (int *)getbytes(sizeof(int) * x->x_num_layers + 1);
   if (!x->x_layer_dims) {
-    pd_error(x, "nnpulse~: failed to allocate memory for layer_dims");
+    pd_error(x, "nnpulse2~: failed to allocate memory for layer_dims");
     return NULL;
   }
   x->x_num_features = 64;
@@ -127,7 +127,7 @@ static void *nnpulse_new(void) {
 
   x->x_input_features = getbytes(sizeof(t_float) * x->x_num_features);
   if (!x->x_input_features) {
-    pd_error(x, "nnpulse~: failed to allocate memory for input_features");
+    pd_error(x, "nnpulse2~: failed to allocate memory for input_features");
     return NULL;
   }
 
@@ -152,7 +152,7 @@ static void *nnpulse_new(void) {
   return (void *)x;
 }
 
-static void nnpulse_free(t_nnpulse *x) {
+static void nnpulse2_free(t_nnpulse2 *x) {
   if (x->x_example_freq_inlet) inlet_free(x->x_example_freq_inlet);
   if (x->x_prediction_outlet) outlet_free(x->x_prediction_outlet);
 
@@ -178,7 +178,7 @@ static void nnpulse_free(t_nnpulse *x) {
   if (x->x_input_features) freebytes(x->x_input_features, sizeof(t_float) * x->x_num_features);
 }
 
-static inline void populate_features(t_nnpulse *x,
+static inline void populate_features(t_nnpulse2 *x,
                                      t_float example_freq,
                                      double current_phase) {
   double features_conv = x->x_features_conv;
@@ -194,7 +194,7 @@ static inline void populate_features(t_nnpulse *x,
   }
 }
 
-static void layer_forward(t_nnpulse *x, t_layer *layer, t_float *input_buffer) {
+static void layer_forward(t_nnpulse2 *x, t_layer *layer, t_float *input_buffer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
   t_float leak = x->x_leak;
@@ -241,7 +241,7 @@ static void layer_forward(t_nnpulse *x, t_layer *layer, t_float *input_buffer) {
   }
 }
 
-static void model_forward(t_nnpulse *x) {
+static void model_forward(t_nnpulse2 *x) {
   for (int l = 0; l < x->x_num_layers; l++) {
     t_layer *layer = &x->x_layers[l];
     t_float *input = (l == 0) ? x->x_input_features : x->x_layers[l-1].l_a_cache;
@@ -249,7 +249,7 @@ static void model_forward(t_nnpulse *x) {
   }
 }
 
-static void calculate_dz(t_nnpulse *x, t_layer *layer) {
+static void calculate_dz(t_nnpulse2 *x, t_layer *layer) {
   int is_relu = layer->l_activation == ACTIVATION_RELU;
   int n = layer->l_n;
   t_float leak = x->x_leak;
@@ -283,7 +283,7 @@ static void calculate_dz(t_nnpulse *x, t_layer *layer) {
   #undef ACTIVATION_DERIVATIVE
 }
 
-static void calculate_db(t_nnpulse *x, int l, t_layer *layer) {
+static void calculate_db(t_nnpulse2 *x, int l, t_layer *layer) {
   int n = layer->l_n;
   
   // special case for output layer
@@ -317,7 +317,7 @@ static void calculate_db(t_nnpulse *x, int l, t_layer *layer) {
   }
 }
 
-static void calculate_da_prev(t_nnpulse *x, int l, t_layer *layer) {
+static void calculate_da_prev(t_nnpulse2 *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
   t_layer *prev_layer = &x->x_layers[l-1];
@@ -361,7 +361,7 @@ static void calculate_da_prev(t_nnpulse *x, int l, t_layer *layer) {
   }
 }
 
-static void calculate_dw(t_nnpulse *x, int l, t_layer *layer) {
+static void calculate_dw(t_nnpulse2 *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
   t_float *prev_activations = (l == 0) ? x->x_input_features : x->x_layers[l-1].l_a_cache;
@@ -407,7 +407,7 @@ static void calculate_dw(t_nnpulse *x, int l, t_layer *layer) {
   }
 }
 
-static void layer_backward(t_nnpulse *x, int l, t_layer *layer) {
+static void layer_backward(t_nnpulse2 *x, int l, t_layer *layer) {
   if (l == x->x_num_layers - 1) {
     // calculate output layer da
     // since the output layer always has 1 neuron
@@ -421,14 +421,14 @@ static void layer_backward(t_nnpulse *x, int l, t_layer *layer) {
   if (l > 0) calculate_da_prev(x, l, layer);
 }
 
-static void model_backward(t_nnpulse *x) {
+static void model_backward(t_nnpulse2 *x) {
   for (int l = x->x_num_layers - 1; l >= 0; l--) {
     t_layer *layer = &x->x_layers[l];
     layer_backward(x, l, layer);
   }
 }
 
-static void update_parameters(t_nnpulse *x) {
+static void update_parameters(t_nnpulse2 *x) {
   for (int l = 0; l < x->x_num_layers; l++) {
     t_layer *layer = &x->x_layers[l];
     int n = layer->l_n;
@@ -444,8 +444,8 @@ static void update_parameters(t_nnpulse *x) {
   }
 }
 
-static t_int *nnpulse_perform(t_int *w) {
-  t_nnpulse *x = (t_nnpulse *)(w[1]);
+static t_int *nnpulse2_perform(t_int *w) {
+  t_nnpulse2 *x = (t_nnpulse2 *)(w[1]);
   t_sample *example_freq_in = (t_sample *)(w[2]);
   t_sample *label_freq_in = (t_sample *)(w[3]);
   t_sample *pred_out = (t_sample *)(w[4]);
@@ -491,14 +491,14 @@ static t_int *nnpulse_perform(t_int *w) {
   return (w+6);
 }
 
-static void nnpulse_dsp(t_nnpulse *x, t_signal **sp) {
+static void nnpulse2_dsp(t_nnpulse2 *x, t_signal **sp) {
   x->x_conv = (double)1.0 / (double)sp[0]->s_sr;
   x->x_feature_samps = (int)(sp[0]->s_sr / x->x_num_features);
   x->x_features_conv = x->x_conv * x->x_feature_samps;
-  dsp_add(nnpulse_perform, 5, x, sp[0]->s_vec, sp[1]->s_vec, sp[2]->s_vec, sp[0]->s_length);
+  dsp_add(nnpulse2_perform, 5, x, sp[0]->s_vec, sp[1]->s_vec, sp[2]->s_vec, sp[0]->s_length);
 }
 
-static void model_reset(t_nnpulse *x) {
+static void model_reset(t_nnpulse2 *x) {
   for (int l = 0; l < x->x_num_layers; l++) {
     t_layer *layer = &x->x_layers[l];
     int n = layer->l_n;
@@ -519,26 +519,26 @@ static void model_reset(t_nnpulse *x) {
   }
 }
 
-static void set_alpha(t_nnpulse *x, t_floatarg f) {
+static void set_alpha(t_nnpulse2 *x, t_floatarg f) {
   x->x_alpha = f;
 }
 
-static void set_leak(t_nnpulse *x, t_floatarg f) {
+static void set_leak(t_nnpulse2 *x, t_floatarg f) {
   x->x_leak = f;
 }
 
-void nnpulse_tilde_setup(void) {
-  nnpulse_class = class_new(gensym("nnpulse~"),
-                            (t_newmethod)nnpulse_new,
-                            (t_method)nnpulse_free,
-                            sizeof(t_nnpulse),
+void nnpulse2_tilde_setup(void) {
+  nnpulse2_class = class_new(gensym("nnpulse2~"),
+                            (t_newmethod)nnpulse2_new,
+                            (t_method)nnpulse2_free,
+                            sizeof(t_nnpulse2),
                             CLASS_DEFAULT,
                             0);
-  class_addmethod(nnpulse_class, (t_method)nnpulse_dsp, gensym("dsp"), A_CANT, 0);
-  class_addmethod(nnpulse_class, (t_method)model_reset, gensym("reset"), 0);
-  class_addmethod(nnpulse_class, (t_method)set_alpha, gensym("alpha"), A_FLOAT, 0);
-  class_addmethod(nnpulse_class, (t_method)set_leak, gensym("leak"), A_FLOAT, 0);
-  CLASS_MAINSIGNALIN(nnpulse_class, t_nnpulse, x_example_freq);
+  class_addmethod(nnpulse2_class, (t_method)nnpulse2_dsp, gensym("dsp"), A_CANT, 0);
+  class_addmethod(nnpulse2_class, (t_method)model_reset, gensym("reset"), 0);
+  class_addmethod(nnpulse2_class, (t_method)set_alpha, gensym("alpha"), A_FLOAT, 0);
+  class_addmethod(nnpulse2_class, (t_method)set_leak, gensym("leak"), A_FLOAT, 0);
+  CLASS_MAINSIGNALIN(nnpulse2_class, t_nnpulse2, x_example_freq);
 }
 
 float he_init(int n_prev) {
@@ -551,7 +551,7 @@ float he_init(int n_prev) {
   return standard_normal * (t_float)(sqrt(2.0 / n_prev));
 }
 
-static void init_layer_weights(t_nnpulse *x, int l) {
+static void init_layer_weights(t_nnpulse2 *x, int l) {
   t_layer *layer = &x->x_layers[l];
   int size = layer->l_n * layer->l_n_prev;
   for (int i = 0; i < size; i++) {
@@ -560,7 +560,7 @@ static void init_layer_weights(t_nnpulse *x, int l) {
   }
 }
 
-static void init_layer_biases(t_nnpulse *x, int l) {
+static void init_layer_biases(t_nnpulse2 *x, int l) {
   t_layer *layer = &x->x_layers[l];
   for (int i = 0; i < layer->l_n; i++) {
     // not technically needed
@@ -568,10 +568,10 @@ static void init_layer_biases(t_nnpulse *x, int l) {
   }
 }
 
-static void initialize_layers(t_nnpulse *x) {
+static void initialize_layers(t_nnpulse2 *x) {
   x->x_layers = (t_layer *)getbytes(sizeof(t_layer) * x->x_num_layers);
   if (!x->x_layers) {
-    pd_error(x, "nnpulse~: failed to allocate memory for layers");
+    pd_error(x, "nnpulse2~: failed to allocate memory for layers");
     return;
   }
 
@@ -588,42 +588,42 @@ static void initialize_layers(t_nnpulse *x) {
 
     layer->l_weights = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
     if (!layer->l_weights) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer weights");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer weights");
       return;
     }
     layer->l_dw = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
     if (!layer->l_dw) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer dw");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer dw");
       return;
     }
     layer->l_biases = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_biases) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer biases");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer biases");
       return;
     }
     layer->l_db = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_db) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer db");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer db");
       return;
     }
     layer->l_z_cache = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_z_cache) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer z_cache");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer z_cache");
       return;
     }
     layer->l_dz = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_dz) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer dz");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer dz");
       return;
     }
     layer->l_a_cache = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_a_cache) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer a_cache");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer a_cache");
       return;
     }
     layer->l_da = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_da) {
-      pd_error(x, "nnpulse~: failed to allocate memory for layer da");
+      pd_error(x, "nnpulse2~: failed to allocate memory for layer da");
       return;
     }
 
@@ -637,7 +637,7 @@ static inline float fast_tanh(float x) {
      return x2 / (1.0f + fabsf(x2));
  }
 
-static t_float apply_activation(t_nnpulse *x, t_layer *layer, t_float z) {
+static t_float apply_activation(t_nnpulse2 *x, t_layer *layer, t_float z) {
   switch(layer->l_activation) {
     case ACTIVATION_SIGMOID:
       return 1.0 / (1.0 + exp(-z));
