@@ -73,6 +73,7 @@ typedef struct _nnpulse3 {
 
   t_float x_leak;
   t_float x_alpha;
+  t_float x_lambda;
 
   t_inlet *x_example_freq_inlet;
   t_inlet *x_label_freq_inlet;
@@ -130,6 +131,7 @@ static void *nnpulse3_new(void) {
 
   x->x_leak = (t_float)0.001;
   x->x_alpha = (t_float)0.0001;
+  x->x_lambda = (t_float)0.0001;
 
   x->x_input_features = getbytes(sizeof(t_float) * x->x_num_features);
   if (!x->x_input_features) {
@@ -204,6 +206,7 @@ static inline void populate_features(t_nnpulse3 *x,
   }
 }
 
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void layer_forward(t_nnpulse3 *x, t_layer *layer, t_float *input_buffer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
@@ -259,15 +262,16 @@ static void model_forward(t_nnpulse3 *x) {
   }
 }
 
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void calculate_dz(t_nnpulse3 *x, t_layer *layer) {
   int is_relu = layer->l_activation == ACTIVATION_RELU;
   int n = layer->l_n;
   t_float leak = x->x_leak;
   int n_unroll_limit = n - 8;
-  
+
   #define ACTIVATION_DERIVATIVE(z) \
     (is_relu ? ((z > 0) ? 1.0f : leak) : 1.0f)
-  
+
   int i = 0;
   for (; i <= n_unroll_limit; i += 8) {
     if (i + 8 < n) {
@@ -284,18 +288,19 @@ static void calculate_dz(t_nnpulse3 *x, t_layer *layer) {
     layer->l_dz[i+6] = layer->l_da[i+6] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+6]);
     layer->l_dz[i+7] = layer->l_da[i+7] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+7]);
   }
-  
+
   // handle remaining elements (or layers where n < 8)
   for (; i < n; i++) {
     layer->l_dz[i] = layer->l_da[i] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i]);
   }
-  
+
   #undef ACTIVATION_DERIVATIVE
 }
 
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void calculate_db(t_nnpulse3 *x, int l, t_layer *layer) {
   int n = layer->l_n;
-  
+
   // special case for output layer
   if (l == x->x_num_layers - 1 && n == 1) {
     // db = dz
@@ -321,12 +326,13 @@ static void calculate_db(t_nnpulse3 *x, int l, t_layer *layer) {
     layer->l_db[i+6] = layer->l_dz[i+6];
     layer->l_db[i+7] = layer->l_dz[i+7];
   }
-  
+
   for (; i < n; i++) {
     layer->l_db[i] = layer->l_dz[i];
   }
 }
 
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void calculate_da_prev(t_nnpulse3 *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
@@ -371,6 +377,7 @@ static void calculate_da_prev(t_nnpulse3 *x, int l, t_layer *layer) {
   }
 }
 
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void calculate_dw(t_nnpulse3 *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
@@ -454,6 +461,66 @@ static void update_parameters(t_nnpulse3 *x) {
   }
 }
 
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
+static void update_parameters_optimized(t_nnpulse3 *x) {
+  for (int l = 0; l < x->x_num_layers; l++) {
+    t_layer *layer = &x->x_layers[l];
+    if (l + 1 < x->x_num_layers) {
+      __builtin_prefetch(&x->x_layers[l+1], 0, 3);
+    }
+
+    int n = layer->l_n;
+    int n_prev = layer->l_n_prev;
+    int num_weights = n * n_prev;
+    int weights_unroll_limit = num_weights - 8;
+   int biases_unroll_limit = n - 8;
+    t_float alpha = x->x_alpha;
+    t_float weight_decay_factor = (t_float)1.0 - alpha * x->x_lambda;
+
+    int j = 0;
+    #pragma GCC ivdep
+    for (; j <= weights_unroll_limit; j += 8) {
+      if (j + 8 < num_weights) {
+        __builtin_prefetch(&layer->l_weights[j+8], 1, 3);
+        __builtin_prefetch(&layer->l_db[j+8], 0, 3);
+      }
+      layer->l_weights[j] = weight_decay_factor * layer->l_weights[j] - alpha * layer->l_dw[j];
+      layer->l_weights[j+1] = weight_decay_factor * layer->l_weights[j+1] - alpha * layer->l_dw[j+1];
+      layer->l_weights[j+2] = weight_decay_factor * layer->l_weights[j+2] - alpha * layer->l_dw[j+2];
+      layer->l_weights[j+3] = weight_decay_factor * layer->l_weights[j+3] - alpha * layer->l_dw[j+3];
+      layer->l_weights[j+4] = weight_decay_factor * layer->l_weights[j+4] - alpha * layer->l_dw[j+4];
+      layer->l_weights[j+5] = weight_decay_factor * layer->l_weights[j+5] - alpha * layer->l_dw[j+5];
+      layer->l_weights[j+6] = weight_decay_factor * layer->l_weights[j+6] - alpha * layer->l_dw[j+6];
+      layer->l_weights[j+7] = weight_decay_factor * layer->l_weights[j+7] - alpha * layer->l_dw[j+7];
+    }
+
+    for (; j < num_weights; j++) {
+      layer->l_weights[j] = weight_decay_factor * layer->l_weights[j] - alpha * layer->l_dw[j];
+    }
+
+    int k = 0;
+    #pragma GCC ivdep
+    for (; k <= biases_unroll_limit; k += 8) {
+      if (k + 8 < n) {
+        __builtin_prefetch(&layer->l_biases[k+8], 1, 3);
+        __builtin_prefetch(&layer->l_db[k+8], 0, 3);
+      }
+      layer->l_biases[k] -= alpha * layer->l_db[k];
+      layer->l_biases[k+1] -= alpha * layer->l_db[k+1];
+      layer->l_biases[k+2] -= alpha * layer->l_db[k+2];
+      layer->l_biases[k+3] -= alpha * layer->l_db[k+3];
+      layer->l_biases[k+4] -= alpha * layer->l_db[k+4];
+      layer->l_biases[k+5] -= alpha * layer->l_db[k+5];
+      layer->l_biases[k+6] -= alpha * layer->l_db[k+6];
+      layer->l_biases[k+7] -= alpha * layer->l_db[k+7];
+    }
+
+    for (; k < n; k++) {
+      layer->l_biases[k] -= alpha * layer->l_db[k];
+    }
+  }
+}
+
 static t_int *nnpulse3_perform(t_int *w) {
   t_nnpulse3 *x = (t_nnpulse3 *)(w[1]);
   t_sample *example_freq_in = (t_sample *)(w[2]);
@@ -492,7 +559,7 @@ static t_int *nnpulse3_perform(t_int *w) {
       model_forward(x);
       x->x_current_label = current_label;
       model_backward(x);
-      update_parameters(x);
+      update_parameters_optimized(x);
     }
 
     y_hat = x->x_layers[output_layer].l_a_cache[0];
@@ -557,6 +624,10 @@ static void set_leak(t_nnpulse3 *x, t_floatarg f) {
   x->x_leak = f;
 }
 
+static void set_lambda(t_nnpulse3 *x, t_floatarg f) {
+  x->x_lambda = (f < (t_float)0.0) ? (t_float)0.0 : f;
+}
+
 void nnpulse3_tilde_setup(void) {
   nnpulse3_class = class_new(gensym("nnpulse3~"),
                             (t_newmethod)nnpulse3_new,
@@ -568,6 +639,7 @@ void nnpulse3_tilde_setup(void) {
   class_addmethod(nnpulse3_class, (t_method)model_reset, gensym("reset"), 0);
   class_addmethod(nnpulse3_class, (t_method)set_alpha, gensym("alpha"), A_FLOAT, 0);
   class_addmethod(nnpulse3_class, (t_method)set_leak, gensym("leak"), A_FLOAT, 0);
+  class_addmethod(nnpulse3_class, (t_method)set_lambda, gensym("lambda"), A_FLOAT, 0);
   CLASS_MAINSIGNALIN(nnpulse3_class, t_nnpulse3, x_example_freq);
 }
 
