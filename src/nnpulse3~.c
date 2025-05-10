@@ -35,8 +35,12 @@ typedef struct _layer {
 
   t_float *l_weights;
   t_float *l_dw;
+  t_float *l_v_dw;
+  t_float *l_s_dw;
   t_float *l_biases;
   t_float *l_db;
+  t_float *l_v_db;
+  t_float *l_s_db;
   t_float *l_z_cache;
   t_float *l_dz;
   t_float *l_a_cache;
@@ -74,6 +78,8 @@ typedef struct _nnpulse3 {
   t_float x_leak;
   t_float x_alpha;
   t_float x_lambda;
+  t_float x_beta_1;
+  t_float x_beta_2;
 
   t_inlet *x_example_freq_inlet;
   t_inlet *x_label_freq_inlet;
@@ -95,7 +101,7 @@ static void *nnpulse3_new(void) {
   x->x_layers = NULL;
   x->x_layer_dims = NULL;
 
-  x->x_num_layers = 6;
+  x->x_num_layers = 7;
   x->x_layer_dims = (int *)getbytes(sizeof(int) * x->x_num_layers + 1);
   if (!x->x_layer_dims) {
     pd_error(x, "nnpulse3~: failed to allocate memory for layer_dims");
@@ -106,11 +112,12 @@ static void *nnpulse3_new(void) {
   // hardcoded for now:
   x->x_layer_dims[0] = x->x_num_features; // input layer
   x->x_layer_dims[1] = 2 * x->x_num_features;
-  x->x_layer_dims[2] = x->x_num_features;
-  x->x_layer_dims[3] = 32;
-  x->x_layer_dims[4] = 32;
-  x->x_layer_dims[5] = 16;
-  x->x_layer_dims[6] = 1; // output layer
+  x->x_layer_dims[2] = 2 * x->x_num_features;
+  x->x_layer_dims[3] = 64;
+  x->x_layer_dims[4] = 64;
+  x->x_layer_dims[5] = 32;
+  x->x_layer_dims[6] = 32;
+  x->x_layer_dims[7] = 1; // output layer
 
   // x->x_conv = (t_float)0.0;
   x->x_conv = (double)0.0;
@@ -132,6 +139,8 @@ static void *nnpulse3_new(void) {
   x->x_leak = (t_float)0.001;
   x->x_alpha = (t_float)0.0001;
   x->x_lambda = (t_float)0.0001;
+  x->x_beta_1 = (t_float)0.9;
+  x->x_beta_2 = (t_float)0.999;
 
   x->x_input_features = getbytes(sizeof(t_float) * x->x_num_features);
   if (!x->x_input_features) {
@@ -177,8 +186,12 @@ static void nnpulse3_free(t_nnpulse3 *x) {
       t_layer *layer = &x->x_layers[l];
       if (layer->l_weights) freebytes(layer->l_weights, sizeof(t_float) * layer->l_n * layer->l_n_prev);
       if (layer->l_dw) freebytes(layer->l_dw, sizeof(t_float) * layer->l_n * layer->l_n_prev);
+      if (layer->l_v_dw) freebytes(layer->l_v_dw, sizeof(t_float) * layer->l_n * layer->l_n_prev);
+      if (layer->l_s_dw) freebytes(layer->l_s_dw, sizeof(t_float) * layer->l_n * layer->l_n_prev);
       if (layer->l_biases) freebytes(layer->l_biases, sizeof(t_float) * layer->l_n);
       if (layer->l_db) freebytes(layer->l_db, sizeof(t_float) * layer->l_n);
+      if (layer->l_v_db) freebytes(layer->l_v_db, sizeof(t_float) * layer->l_n);
+      if (layer->l_s_db) freebytes(layer->l_s_db, sizeof(t_float) * layer->l_n);
       if (layer->l_z_cache) freebytes(layer->l_z_cache, sizeof(t_float) * layer->l_n);
       if (layer->l_dz) freebytes(layer->l_dz, sizeof(t_float) * layer->l_n);
       if (layer->l_a_cache) freebytes(layer->l_a_cache, sizeof(t_float) * layer->l_n);
@@ -521,6 +534,145 @@ static void update_parameters_optimized(t_nnpulse3 *x) {
   }
 }
 
+// Fast inverse square root (Quake III algorithm) (modified)
+static inline float fast_inv_sqrt(float number) {
+    float y = number;
+    float x2 = y * 0.5F;
+    
+    // Use a union for type punning (avoids strict aliasing violations)
+    union {
+        float f;
+        int32_t i;  // Use int32_t for portability
+    } conv;
+    
+    conv.f = y;
+    conv.i = 0x5f3759df - (conv.i >> 1);
+    y = conv.f;
+    
+    // One Newton-Raphson iteration
+    y = y * (1.5F - (x2 * y * y));
+    
+    return y;
+}
+
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
+static void update_parameters_adam(t_nnpulse3 *x) {
+    const float beta1 = x->x_beta_1;
+    const float beta2 = x->x_beta_2;
+    const float one_minus_beta1 = 1.0f - beta1;
+    const float one_minus_beta2 = 1.0f - beta2;
+    const float alpha = x->x_alpha;
+    const float epsilon = 1e-8f;
+    const float weight_decay_factor = 1.0f - alpha * x->x_lambda;
+
+    for (int l = 0; l < x->x_num_layers; l++) {
+        t_layer *layer = &x->x_layers[l];
+        if (l + 1 < x->x_num_layers) {
+            __builtin_prefetch(&x->x_layers[l+1], 0, 3);
+        }
+
+        int n = layer->l_n;
+        int n_prev = layer->l_n_prev;
+        int num_weights = n * n_prev;
+        int weights_unroll_limit = num_weights - 8;
+        int biases_unroll_limit = n - 8;
+
+        // Process weights
+        int j = 0;
+        #pragma GCC ivdep
+        for (; j <= weights_unroll_limit; j += 8) {
+            if (j + 8 < num_weights) {
+                __builtin_prefetch(&layer->l_weights[j+8], 1, 3);
+                __builtin_prefetch(&layer->l_dw[j+8], 0, 3);
+                __builtin_prefetch(&layer->l_v_dw[j+8], 1, 3);
+                __builtin_prefetch(&layer->l_s_dw[j+8], 1, 3);
+            }
+
+            // Unrolled loop for 8 elements at a time
+            for (int k = 0; k < 8; k++) {
+                int idx = j + k;
+                float dw = layer->l_dw[idx];
+
+                // Update momentum
+                layer->l_v_dw[idx] = beta1 * layer->l_v_dw[idx] + one_minus_beta1 * dw;
+
+                // Update squared gradient accumulation
+                layer->l_s_dw[idx] = beta2 * layer->l_s_dw[idx] + one_minus_beta2 * dw * dw;
+
+                // Compute update
+                float update = alpha * layer->l_v_dw[idx] * fast_inv_sqrt(layer->l_s_dw[idx] + epsilon);
+
+                // Apply update with weight decay
+                layer->l_weights[idx] = weight_decay_factor * layer->l_weights[idx] - update;
+            }
+        }
+
+        // Handle remaining weights
+        for (; j < num_weights; j++) {
+            float dw = layer->l_dw[j];
+
+            // Update momentum
+            layer->l_v_dw[j] = beta1 * layer->l_v_dw[j] + one_minus_beta1 * dw;
+
+            // Update squared gradient accumulation
+            layer->l_s_dw[j] = beta2 * layer->l_s_dw[j] + one_minus_beta2 * dw * dw;
+
+            // Compute update
+            float update = alpha * layer->l_v_dw[j] * fast_inv_sqrt(layer->l_s_dw[j] + epsilon);
+
+            // Apply update with weight decay
+            layer->l_weights[j] = weight_decay_factor * layer->l_weights[j] - update;
+        }
+
+        // Process biases (similar approach)
+        int k = 0;
+        #pragma GCC ivdep
+        for (; k <= biases_unroll_limit; k += 8) {
+            if (k + 8 < n) {
+                __builtin_prefetch(&layer->l_biases[k+8], 1, 3);
+                __builtin_prefetch(&layer->l_db[k+8], 0, 3);
+                __builtin_prefetch(&layer->l_v_db[k+8], 1, 3);
+                __builtin_prefetch(&layer->l_s_db[k+8], 1, 3);
+            }
+
+            // Unrolled loop for biases
+            for (int i = 0; i < 8; i++) {
+                int idx = k + i;
+                float db = layer->l_db[idx];
+
+                // Update momentum
+                layer->l_v_db[idx] = beta1 * layer->l_v_db[idx] + one_minus_beta1 * db;
+
+                // Update squared gradient accumulation
+                layer->l_s_db[idx] = beta2 * layer->l_s_db[idx] + one_minus_beta2 * db * db;
+
+                // Compute update
+                float update = alpha * layer->l_v_db[idx] * fast_inv_sqrt(layer->l_s_db[idx] + epsilon);
+
+                // Apply update (biases typically don't use weight decay)
+                layer->l_biases[idx] -= update;
+            }
+        }
+
+        // Handle remaining biases
+        for (; k < n; k++) {
+            float db = layer->l_db[k];
+
+            // Update momentum
+            layer->l_v_db[k] = beta1 * layer->l_v_db[k] + one_minus_beta1 * db;
+
+            // Update squared gradient accumulation
+            layer->l_s_db[k] = beta2 * layer->l_s_db[k] + one_minus_beta2 * db * db;
+
+            // Compute update
+            float update = alpha * layer->l_v_db[k] * fast_inv_sqrt(layer->l_s_db[k] + epsilon);
+
+            // Apply update
+            layer->l_biases[k] -= update;
+        }
+    }
+}
+
 static t_int *nnpulse3_perform(t_int *w) {
   t_nnpulse3 *x = (t_nnpulse3 *)(w[1]);
   t_sample *example_freq_in = (t_sample *)(w[2]);
@@ -559,7 +711,7 @@ static t_int *nnpulse3_perform(t_int *w) {
       model_forward(x);
       x->x_current_label = current_label;
       model_backward(x);
-      update_parameters_optimized(x);
+      update_parameters_adam(x);
     }
 
     y_hat = x->x_layers[output_layer].l_a_cache[0];
@@ -698,6 +850,16 @@ static void initialize_layers(t_nnpulse3 *x) {
       pd_error(x, "nnpulse3~: failed to allocate memory for layer dw");
       return;
     }
+    layer->l_v_dw = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
+    if (!layer->l_v_dw) {
+      pd_error(x, "nnpulse3~: failed to allocate memory for layer v_dw");
+      return;
+    }
+    layer->l_s_dw = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
+    if (!layer->l_s_dw) {
+      pd_error(x, "nnpulse3~: failed to allocate memory for layer s_dw");
+      return;
+    }
     layer->l_biases = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_biases) {
       pd_error(x, "nnpulse3~: failed to allocate memory for layer biases");
@@ -706,6 +868,16 @@ static void initialize_layers(t_nnpulse3 *x) {
     layer->l_db = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_db) {
       pd_error(x, "nnpulse3~: failed to allocate memory for layer db");
+      return;
+    }
+    layer->l_v_db = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
+    if (!layer->l_v_db) {
+      pd_error(x, "nnpulse3~: failed to allocate memory for layer v_db");
+      return;
+    }
+    layer->l_s_db = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
+    if (!layer->l_s_db) {
+      pd_error(x, "nnpulse3~: failed to allocate memory for layer s_db");
       return;
     }
     layer->l_z_cache = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
