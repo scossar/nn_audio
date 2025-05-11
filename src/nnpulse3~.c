@@ -212,7 +212,8 @@ static inline void populate_features(t_nnpulse3 *x,
   t_float *features_buffer = x->x_input_features;
 
   for (int i = 0; i < num_features; i++) {
-    features_buffer[i] = (current_phase < pw) ? (t_float)1.0 : (t_float)-1.0;
+    // features_buffer[i] = (current_phase < pw) ? (t_float)1.0 : (t_float)-1.0;
+    features_buffer[i] = current_phase;
 
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
