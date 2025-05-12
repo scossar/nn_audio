@@ -71,9 +71,13 @@ typedef struct _nnpulse3 {
   t_float x_current_label;
   t_float x_previous_label;
 
+  t_float x_prev_example_pulse;
+  t_float x_prev_label_pulse;
+
   int x_num_features;
   int x_feature_samps; // int for now
   t_float *x_input_features;
+  t_sample x_y_hat;
 
   t_float x_leak;
   t_float x_alpha;
@@ -135,6 +139,11 @@ static void *nnpulse3_new(void) {
   x->x_label_pw = (t_float)0.5;
   x->x_previous_label = (t_float)0.0f;
   x->x_current_label = (t_float)0.0;
+
+  x->x_prev_example_pulse = (t_float)0.0;
+  x->x_prev_label_pulse = (t_float)0.0;
+
+  x->x_y_hat = (t_sample)0.0;
 
   x->x_leak = (t_float)0.001;
   x->x_alpha = (t_float)0.0001;
@@ -207,7 +216,7 @@ static inline void populate_features(t_nnpulse3 *x,
                                      t_float example_freq,
                                      double current_phase) {
   double features_conv = x->x_features_conv;
-  t_float pw = x->x_example_pw; // hardcoded for now
+  // t_float pw = x->x_example_pw; // hardcoded for now
   int num_features = x->x_num_features;
   t_float *features_buffer = x->x_input_features;
 
@@ -215,6 +224,61 @@ static inline void populate_features(t_nnpulse3 *x,
     // features_buffer[i] = (current_phase < pw) ? (t_float)1.0 : (t_float)-1.0;
     features_buffer[i] = current_phase;
 
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+  }
+}
+
+// see audio_neural_network_optimizations.md for more optimizations
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
+static void populate_features_optimized_v1(t_nnpulse3 *x,
+                                        t_float example_freq,
+                                        double current_phase) {
+  double features_conv = x->x_features_conv;
+  int num_features = x->x_num_features;
+  t_float pw = x->x_example_pw;
+  int features_unroll_limit = num_features - 8;
+  t_float *features_buffer = x->x_input_features;
+
+  // post("current_label: %f:", x->x_current_label);
+  int i = 0;
+  #pragma GCC ivdep
+  for (; i <= features_unroll_limit; i += 8) {
+    features_buffer[i] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i, current_phase);
+    features_buffer[i+1] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i+1, current_phase);
+    features_buffer[i+2] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i+2, current_phase);
+    features_buffer[i+3] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i+3, current_phase);
+    features_buffer[i+4] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i+4, current_phase);
+    features_buffer[i+5] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i+5, current_phase);
+    features_buffer[i+6] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i+6, current_phase);
+    features_buffer[i+7] = current_phase;
+    current_phase += example_freq * features_conv;
+    current_phase -= floor(current_phase);
+    // post("phase for %d: %f", i+7, current_phase);
+  }
+  for (; i < num_features; i++) {
+    features_buffer[i] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
   }
@@ -694,28 +758,38 @@ static t_int *nnpulse3_perform(t_int *w) {
   t_float previous_label = x->x_previous_label;
   t_float previous_example = x->x_previous_example;
 
+  t_sample y_hat = x->x_y_hat;
+
   int example_bang = 0;
   int label_bang = 0;
 
+  t_float example_freq = x->x_example_freq;
+  t_float label_freq = x->x_label_freq;
+
+  t_float prev_example_pulse = x->x_prev_example_pulse;
+  t_float prev_label_pulse = x->x_prev_label_pulse;
+
   while (n--) {
-    t_sample example_freq = *example_freq_in++;
-    t_sample label_freq = *label_freq_in++;
-    t_sample y_hat = (t_sample)0.0;
-    t_float current_example = (example_phase < example_pw) ? (t_float)1.0 : (t_float)-1.0;
-    t_float current_label = (label_phase < label_pw) ? (t_float)1.0 : (t_float)-1.0;
+    example_freq = *example_freq_in++;
+    label_freq = *label_freq_in++;
+    t_float current_example_pulse = (example_phase < example_pw) ? (t_float)1.0 : (t_float)0.0;
+    t_float current_label_pulse = (label_phase < label_pw) ? (t_float)1.0 : (t_float)0.0;
+
+    t_float current_example = example_phase;
+    t_float current_label = label_phase;
 
     if (current_example < previous_example) example_bang = 1;
     if (current_label < previous_label) label_bang = 1;
 
-    if ((current_example != previous_example) || (current_label != previous_label)) {
-      populate_features(x, example_freq, example_phase);
-      model_forward(x);
-      x->x_current_label = current_label;
-      model_backward(x);
-      update_parameters_adam(x);
+    if (current_example_pulse != prev_example_pulse || current_label_pulse != prev_label_pulse) {
+      // populate_features_optimized_v1(x, example_freq, example_phase);
+      // populate_features(x, example_freq, example_phase);
+      // model_forward(x);
+      // x->x_current_label = current_label_pulse;
+      // model_backward(x);
+      // update_parameters_adam(x);
+      y_hat = x->x_layers[output_layer].l_a_cache[0];
     }
-
-    y_hat = x->x_layers[output_layer].l_a_cache[0];
 
     *pred_out++ = y_hat;
 
@@ -725,10 +799,20 @@ static t_int *nnpulse3_perform(t_int *w) {
     label_phase -= floor(label_phase);
     previous_example = current_example;
     previous_label = current_label;
+    prev_example_pulse = current_example_pulse;
+    prev_label_pulse = current_label_pulse;
+    x->x_current_label = current_label_pulse;
   }
 
+  populate_features_optimized_v1(x, example_freq, example_phase);
+  model_forward(x);
+  model_backward(x);
+  update_parameters_adam(x);
   x->x_previous_example = previous_example;
   x->x_previous_label = previous_label;
+  x->x_prev_example_pulse = prev_example_pulse;
+  x->x_prev_label_pulse = prev_label_pulse;
+  x->x_y_hat = y_hat;
 
   x->x_example_phase = example_phase;
   x->x_label_phase = label_phase;
