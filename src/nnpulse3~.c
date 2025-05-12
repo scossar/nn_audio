@@ -839,6 +839,16 @@ static void model_reset(t_nnpulse3 *x) {
   }
 }
 
+static void set_example_pw(t_nnpulse3 *x, t_floatarg f) {
+  f = (f > (t_float)1.0) ? (t_float)1.0 : (f < (t_float)0.0) ? (t_float)0.0 : f;
+  x->x_example_pw = f;
+}
+
+static void set_label_pw(t_nnpulse3 *x, t_floatarg f) {
+  f = (f > (t_float)1.0) ? (t_float)1.0 : (f < (t_float)0.0) ? (t_float)0.0 : f;
+  x->x_label_pw = f;
+}
+
 static void set_alpha(t_nnpulse3 *x, t_floatarg f) {
   x->x_alpha = f;
 }
@@ -863,6 +873,8 @@ void nnpulse3_tilde_setup(void) {
   class_addmethod(nnpulse3_class, (t_method)set_alpha, gensym("alpha"), A_FLOAT, 0);
   class_addmethod(nnpulse3_class, (t_method)set_leak, gensym("leak"), A_FLOAT, 0);
   class_addmethod(nnpulse3_class, (t_method)set_lambda, gensym("lambda"), A_FLOAT, 0);
+  class_addmethod(nnpulse3_class, (t_method)set_example_pw, gensym("example_pw"), A_FLOAT, 0);
+  class_addmethod(nnpulse3_class, (t_method)set_label_pw, gensym("label_pw"), A_FLOAT, 0);
   CLASS_MAINSIGNALIN(nnpulse3_class, t_nnpulse3, x_example_freq);
 }
 
