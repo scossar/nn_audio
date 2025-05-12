@@ -240,42 +240,33 @@ static void populate_features_optimized_v1(t_nnpulse3 *x,
   int features_unroll_limit = num_features - 8;
   t_float *features_buffer = x->x_input_features;
 
-  // post("current_label: %f:", x->x_current_label);
   int i = 0;
   #pragma GCC ivdep
   for (; i <= features_unroll_limit; i += 8) {
     features_buffer[i] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i, current_phase);
     features_buffer[i+1] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i+1, current_phase);
     features_buffer[i+2] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i+2, current_phase);
     features_buffer[i+3] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i+3, current_phase);
     features_buffer[i+4] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i+4, current_phase);
     features_buffer[i+5] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i+5, current_phase);
     features_buffer[i+6] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i+6, current_phase);
     features_buffer[i+7] = current_phase;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
-    // post("phase for %d: %f", i+7, current_phase);
   }
   for (; i < num_features; i++) {
     features_buffer[i] = current_phase;
@@ -782,12 +773,6 @@ static t_int *nnpulse3_perform(t_int *w) {
     if (current_label < previous_label) label_bang = 1;
 
     if (current_example_pulse != prev_example_pulse || current_label_pulse != prev_label_pulse) {
-      // populate_features_optimized_v1(x, example_freq, example_phase);
-      // populate_features(x, example_freq, example_phase);
-      // model_forward(x);
-      // x->x_current_label = current_label_pulse;
-      // model_backward(x);
-      // update_parameters_adam(x);
       y_hat = x->x_layers[output_layer].l_a_cache[0];
     }
 
@@ -801,9 +786,10 @@ static t_int *nnpulse3_perform(t_int *w) {
     previous_label = current_label;
     prev_example_pulse = current_example_pulse;
     prev_label_pulse = current_label_pulse;
-    x->x_current_label = current_label_pulse;
+    // x->x_current_label = current_label_pulse;
   }
 
+  x->x_current_label = prev_label_pulse;
   populate_features_optimized_v1(x, example_freq, example_phase);
   model_forward(x);
   model_backward(x);
@@ -990,40 +976,3 @@ static void initialize_layers(t_nnpulse3 *x) {
     init_layer_biases(x, l);
   }
 }
-
-// static inline float fast_tanh(float x) {
-//      float x2 = 2.0f * x;
-//      return x2 / (1.0f + fabsf(x2));
-//  }
-//
-// static t_float apply_activation(t_nnpulse3 *x, t_layer *layer, t_float z) {
-//   switch(layer->l_activation) {
-//     case ACTIVATION_SIGMOID:
-//       return 1.0 / (1.0 + exp(-z));
-//     case ACTIVATION_TANH:
-//       return fast_tanh(z);
-//       // return tanh(z);
-//     case ACTIVATION_RELU:
-//       return z > 0 ? z : z * x->x_leak;
-//     case ACTIVATION_LINEAR:
-//     default:
-//       return z;
-//   }
-// }
-//
-// static t_float activation_derivative(t_activation_type activation,
-//                                      t_float z,
-//                                      t_float a,
-//                                      t_float leak) {
-//   switch(activation) {
-//     case ACTIVATION_SIGMOID:
-//       return a * (1.0 - a);
-//     case ACTIVATION_TANH:
-//       return 1.0 - a * a;
-//     case ACTIVATION_RELU:
-//       return z > 0 ? 1.0 : leak;
-//     case ACTIVATION_LINEAR:
-//     default:
-//       return 1.0;
-//   }
-// }
