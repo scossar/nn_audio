@@ -79,6 +79,7 @@ typedef struct _nnpulse3 {
   int x_feature_samps; // int for now
   t_float *x_input_features;
   t_sample x_y_hat;
+  t_float x_da;
 
   t_float x_leak;
   t_float x_alpha;
@@ -95,10 +96,9 @@ typedef struct _nnpulse3 {
 
 static t_class *nnpulse3_class = NULL;
 static void initialize_layers(t_nnpulse3 *x);
-// static t_float apply_activation(t_nnpulse3 *x, t_layer *layer, t_float z);
-// static t_float activation_derivative(t_activation_type activation, t_float z, t_float a, t_float leak);
 static void init_layer_weights(t_nnpulse3 *x, int l);
 static void init_layer_biases(t_nnpulse3 *x, int l);
+static void model_reset(t_nnpulse3 *x);
 
 static void *nnpulse3_new(void) {
   t_nnpulse3 *x = (t_nnpulse3 *)pd_new(nnpulse3_class);
@@ -132,14 +132,15 @@ static void *nnpulse3_new(void) {
   // x->x_example_phase = (t_float)0.0;
   x->x_example_phase = (double)0.0;
   x->x_example_pw = (t_float)0.5;
-  x->x_previous_example = (t_float)0.0f;
+  x->x_previous_example = (t_float)0.0;
 
   x->x_label_freq = (t_float)1.0;
   // x->x_label_phase = (t_float)0.0;
   x->x_label_phase = (double)0.0;
   x->x_label_pw = (t_float)0.5;
-  x->x_previous_label = (t_float)0.0f;
+  x->x_previous_label = (t_float)0.0;
   x->x_current_label = (t_float)0.0;
+  x->x_da = (t_float)1.0; // just a guess
 
   x->x_prev_example_pulse = (t_float)0.0;
   x->x_prev_label_pulse = (t_float)0.0;
@@ -497,10 +498,13 @@ static void calculate_dw(t_nnpulse3 *x, int l, t_layer *layer) {
 }
 
 static void layer_backward(t_nnpulse3 *x, int l, t_layer *layer) {
+  t_float da = (t_float)1.0;
   if (l == x->x_num_layers - 1) {
     // calculate output layer da
     // since the output layer always has 1 neuron
-    layer->l_da[0] = layer->l_a_cache[0] - x->x_current_label;
+    da = layer->l_a_cache[0] - x->x_current_label;
+    layer->l_da[0] = da;
+    x->x_da = da;
   }
 
   calculate_dz(x, layer);
@@ -776,9 +780,7 @@ static t_int *nnpulse3_perform(t_int *w) {
     if (current_label < previous_label) label_bang = 1;
 
     if (current_example_pulse != prev_example_pulse || current_label_pulse != prev_label_pulse) {
-      x->x_current_label = current_label_pulse;
-      populate_features_optimized_v1(x, example_freq, example_phase);
-      model_forward(x);
+      // x->x_current_label = current_label_pulse;
       y_hat = x->x_layers[output_layer].l_a_cache[0];
     }
 
@@ -792,13 +794,18 @@ static t_int *nnpulse3_perform(t_int *w) {
     previous_label = current_label;
     prev_example_pulse = current_example_pulse;
     prev_label_pulse = current_label_pulse;
+    x->x_current_label = current_label_pulse;
   }
 
-  x->x_current_label = prev_label_pulse;
   populate_features_optimized_v1(x, example_freq, example_phase);
   model_forward(x);
   model_backward(x);
   update_parameters_adam(x);
+
+  if (fabsf(y_hat - (t_float)0.5) < 0.1 ) {
+    x->x_alpha += (t_float)0.00000001;
+  }
+
   x->x_previous_example = previous_example;
   x->x_previous_label = previous_label;
   x->x_prev_example_pulse = prev_example_pulse;
