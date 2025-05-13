@@ -9,6 +9,7 @@
  * notes:
  * - phasor_implementation.md
  * - optimization_techniques_for_dsp_code.md
+ * - audio_neural_network_optimization_methods.md
  **/
 
 // only handles relu and linear
@@ -243,7 +244,9 @@ static void populate_features_optimized_v1(t_nnpulse3 *x,
   int i = 0;
   #pragma GCC ivdep
   for (; i <= features_unroll_limit; i += 8) {
-    features_buffer[i] = current_phase;
+    // features_buffer[i] = current_phase;
+    // give every 8th feature current pulse state
+    features_buffer[i] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
     current_phase += example_freq * features_conv;
     current_phase -= floor(current_phase);
     features_buffer[i+1] = current_phase;
@@ -773,6 +776,9 @@ static t_int *nnpulse3_perform(t_int *w) {
     if (current_label < previous_label) label_bang = 1;
 
     if (current_example_pulse != prev_example_pulse || current_label_pulse != prev_label_pulse) {
+      x->x_current_label = current_label_pulse;
+      populate_features_optimized_v1(x, example_freq, example_phase);
+      model_forward(x);
       y_hat = x->x_layers[output_layer].l_a_cache[0];
     }
 
@@ -786,7 +792,6 @@ static t_int *nnpulse3_perform(t_int *w) {
     previous_label = current_label;
     prev_example_pulse = current_example_pulse;
     prev_label_pulse = current_label_pulse;
-    // x->x_current_label = current_label_pulse;
   }
 
   x->x_current_label = prev_label_pulse;
@@ -829,8 +834,12 @@ static void model_reset(t_nnpulse3 *x) {
     memset(layer->l_da, 0, sizeof(t_float) * n);
     memset(layer->l_weights, 0, sizeof(t_float) * w_size);
     memset(layer->l_dw, 0, sizeof(t_float) * w_size);
+    memset(layer->l_v_dw, 0, sizeof(t_float) * w_size);
+    memset(layer->l_s_dw, 0, sizeof(t_float) * w_size);
     memset(layer->l_biases, 0, sizeof(t_float) * n);
     memset(layer->l_db, 0, sizeof(t_float) * n);
+    memset(layer->l_v_db, 0, sizeof(t_float) * n);
+    memset(layer->l_s_db, 0, sizeof(t_float) * n);
 
     init_layer_weights(x, l);
     init_layer_biases(x, l);
