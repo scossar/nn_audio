@@ -78,7 +78,7 @@ typedef struct _nnpulse3 {
   int x_num_features;
   int x_feature_samps; // int for now
   t_float *x_input_features;
-  t_sample x_y_hat;
+  t_sample x_y_hat; // y_hat and da are the same thing!
   t_float x_da;
 
   t_float x_leak;
@@ -894,7 +894,7 @@ void nnpulse3_tilde_setup(void) {
   CLASS_MAINSIGNALIN(nnpulse3_class, t_nnpulse3, x_example_freq);
 }
 
-float he_init(int n_prev) {
+static float he_init(int n_prev) {
   t_float u1 = (t_float)rand() / RAND_MAX;
   t_float u2 = (t_float)rand() / RAND_MAX;
   t_float radius = (t_float)(sqrt(-2 * log(u1)));
