@@ -107,7 +107,7 @@ static void *nnlfo_new(void) {
   t_nnlfo *x = (t_nnlfo *)pd_new(nnlfo_class);
 
   x->x_layers = NULL;
-  x->x_num_layers = 5;
+  x->x_num_layers = 7;
   x->x_num_features = 64; // hardcoded for now
   x->x_features_reciprocal = (t_float)((t_float)1.0 / (t_float)x->x_num_features);
   x->x_phase_rep = PHASE_LINEAR;
@@ -879,11 +879,13 @@ static void nnlfo_free(t_nnlfo *x) {
 static void set_layer_dims(t_nnlfo *x) {
   // hardcoded for now
   x->x_layer_dims[0] = x->x_num_features;
-  x->x_layer_dims[1] = x->x_num_features * 3;
-  x->x_layer_dims[2] = x->x_num_features * 2;
-  x->x_layer_dims[3] = x->x_num_features;
-  x->x_layer_dims[4] = 32;
-  x->x_layer_dims[5] = 1;
+  x->x_layer_dims[1] = x->x_num_features * 2;
+  x->x_layer_dims[2] = x->x_num_features;
+  x->x_layer_dims[3] = x->x_num_features * 0.5;
+  x->x_layer_dims[4] = x->x_num_features * 0.25;
+  x->x_layer_dims[5] = x->x_num_features;
+  x->x_layer_dims[6] = x->x_num_features * 0.5;
+  x->x_layer_dims[7] = 1;
 }
 
 static float he_init(int n_prev) {
