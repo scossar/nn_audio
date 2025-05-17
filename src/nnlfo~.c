@@ -163,11 +163,13 @@ static void *nnlfo_new(void) {
     return NULL;
   }
 
-  static int seed_initialized = 0;
-  if (!seed_initialized) {
-    srand((unsigned int)time(NULL));
-    seed_initialized = 1;
-  }
+  // add a seed option, generally I don't want it
+  // static int seed_initialized = 0;
+  // if (!seed_initialized) {
+  //   srand((unsigned int)time(NULL));
+  //   seed_initialized = 1;
+  // }
+
   initialize_layers(x);
 
   x->x_y_hat = (t_sample)0.0;
@@ -822,6 +824,7 @@ static void reset_model(t_nnlfo *x) {
   x->x_features_filled = 0;
 }
 
+// not used
 static void set_phase_representation(t_nnlfo *x, t_symbol *_s, int _argc, t_atom *argv) {
   t_symbol *phase_type = atom_getsymbol(argv++);
   if (phase_type == gensym("linear")) {
@@ -858,6 +861,16 @@ static void set_batch_size(t_nnlfo *x, t_floatarg f) {
   x->x_batch_size = f;
 }
 
+static void set_example_pw(t_nnlfo *x, t_floatarg f) {
+  f = (f > (t_float)1.0) ? (t_float)1.0 : (f < (t_float)0.0) ? (t_float)0.0 : f;
+  x->x_example_pw = f;
+}
+
+static void set_label_pw(t_nnlfo *x, t_floatarg f) {
+  f = (f > (t_float)1.0) ? (t_float)1.0 : (f < (t_float)0.0) ? (t_float)0.0 : f;
+  x->x_label_pw = f;
+}
+
 void nnlfo_tilde_setup(void) {
   nnlfo_class = class_new(gensym("nnlfo~"),
                           (t_newmethod)nnlfo_new,
@@ -873,6 +886,8 @@ void nnlfo_tilde_setup(void) {
   class_addmethod(nnlfo_class, (t_method)set_beta_1, gensym("beta_1"), A_FLOAT, 0);
   class_addmethod(nnlfo_class, (t_method)set_beta_2, gensym("beta_2"), A_FLOAT, 0);
   class_addmethod(nnlfo_class, (t_method)set_batch_size, gensym("batch_size"), A_FLOAT, 0);
+  class_addmethod(nnlfo_class, (t_method)set_example_pw, gensym("example_pw"), A_FLOAT, 0);
+  class_addmethod(nnlfo_class, (t_method)set_label_pw, gensym("label_pw"), A_FLOAT, 0);
 
   class_addmethod(nnlfo_class, (t_method)set_phase_representation, gensym("phase_representation"),
                   A_SYMBOL, 0);
