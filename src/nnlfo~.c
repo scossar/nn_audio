@@ -20,6 +20,7 @@
 #define HANDLE_ACTIVATION(z) \
   (is_relu ? ((z > 0) ? z : z * leak) : z)
 
+
 typedef enum {
   ACTIVATION_LINEAR,
   ACTIVATION_RELU
@@ -75,6 +76,7 @@ typedef struct _nnlfo {
   int x_features_filled;
 
   t_float *x_batch_labels;
+  t_float x_batch_scale;
 
   t_float x_label_freq;
   // double x_label_conv;
@@ -137,6 +139,7 @@ static void *nnlfo_new(void) {
   x->x_previous_example_pulse = (t_float)0.0;
 
   x->x_batch_size = 8; // would ideally be set from x_example_freq
+  x->x_batch_scale = (t_float)1.0 / (t_float)x->x_batch_size;
   x->x_batch_labels = getbytes(sizeof(t_float) * x->x_batch_size);
   if (!x->x_batch_labels) {
     pd_error(x, "nnlfo~: failed to allocate memory for batch_labels");
@@ -190,46 +193,41 @@ static void *nnlfo_new(void) {
 static void layer_forward(t_nnlfo *x, t_layer *layer, t_float *input_buffer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
+  int n_prev_unroll_limit = n_prev - 8;
+  int batch_size = x->x_batch_size;
   t_float leak = x->x_leak;
 
-  // pre-compute activation function selection
   int is_relu = (layer->l_activation == ACTIVATION_RELU);
 
-  int n_prev_unroll_limit = n_prev - 8;
+  #pragma GCC ivdep
+  for (int j = 0; j < batch_size; j++) {
+    int batch_offset = j * n_prev;
 
-  for (int i = 0; i < n; i++) {
-    t_float z = layer->l_biases[i];
-    // prefetch next bias
-    // __builtin_prefetch args:
-    // 1: pointer to memory address
-    // 2: read/write access (0 read, 1 write)
-    // 3: locality hint (0 - 3), 3 indicates high locality
-    // locality seems to be intended to indicate how often the data will be
-    // accessed?
-    if (i + 1 < n) __builtin_prefetch(&layer->l_biases[i+1], 0, 3);
+    for (int i = 0; i < n; i++) {
+      t_float z = layer->l_biases[i];
+      if (i + 1 < n) __builtin_prefetch(&layer->l_biases[i+1], 0, 3);
 
-    // unroll by 8 (there's a technical reason for 8)
-    int k = 0;
-    for (; k <= n_prev_unroll_limit; k += 8) {
-      __builtin_prefetch(&layer->l_weights[i*n_prev+k+8], 0, 3);
-      z += layer->l_weights[i*n_prev+k] * input_buffer[k] +
-           layer->l_weights[i*n_prev+k+1] * input_buffer[k+1] +
-           layer->l_weights[i*n_prev+k+2] * input_buffer[k+2] +
-           layer->l_weights[i*n_prev+k+3] * input_buffer[k+3] +
-           layer->l_weights[i*n_prev+k+4] * input_buffer[k+4] +
-           layer->l_weights[i*n_prev+k+5] * input_buffer[k+5] +
-           layer->l_weights[i*n_prev+k+6] * input_buffer[k+6] +
-           layer->l_weights[i*n_prev+k+7] * input_buffer[k+7];
+      int k = 0;
+      for (; k <= n_prev_unroll_limit; k += 8) {
+        __builtin_prefetch(&layer->l_weights[i*n_prev+k+8], 0, 3);
+        z += layer->l_weights[i*n_prev+k] * input_buffer[batch_offset + k] +
+             layer->l_weights[i*n_prev+k+1] * input_buffer[batch_offset + k+1] +
+             layer->l_weights[i*n_prev+k+2] * input_buffer[batch_offset + k+2] +
+             layer->l_weights[i*n_prev+k+3] * input_buffer[batch_offset + k+3] +
+             layer->l_weights[i*n_prev+k+4] * input_buffer[batch_offset + k+4] +
+             layer->l_weights[i*n_prev+k+5] * input_buffer[batch_offset + k+5] +
+             layer->l_weights[i*n_prev+k+6] * input_buffer[batch_offset + k+6] +
+             layer->l_weights[i*n_prev+k+7] * input_buffer[batch_offset + k+7];
+      }
+
+      for (; k < n_prev; k++) {
+        z += layer->l_weights[i*n_prev+k] * input_buffer[batch_offset + k];
+      }
+
+      int cache_idx = j * n + i;  // batch_idx * units_in_layer + unit_idx
+      layer->l_z_cache[cache_idx] = z;
+      layer->l_a_cache[cache_idx] = HANDLE_ACTIVATION(z);
     }
-
-    // handle remaining elements
-    for (; k < n_prev; k++) {
-      z += layer->l_weights[i*n_prev+k] * input_buffer[k];
-    }
-
-    layer->l_z_cache[i] = z;
-
-    layer->l_a_cache[i] = HANDLE_ACTIVATION(z);
   }
 }
 
@@ -283,156 +281,118 @@ static void populate_features_linear(t_nnlfo *x,
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void populate_features_linear_inverse(t_nnlfo *x,
-                                        t_float example_freq,
-                                        double current_phase) {
-  double features_conv = x->x_features_conv;
-  int num_features = x->x_num_features;
-  int features_unroll_limit = num_features - 8;
-  t_float *features_buffer = x->x_input_features;
-  t_float recip = x->x_features_reciprocal; // keep the phase representation within the range
-  // 0, 1
-
-  int i = 0;
-  #pragma GCC ivdep
-  for (; i <= features_unroll_limit; i += 8) {
-    features_buffer[i] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-    features_buffer[i+1] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-    features_buffer[i+2] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-    features_buffer[i+3] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-    features_buffer[i+4] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-    features_buffer[i+5] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-    features_buffer[i+6] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-    features_buffer[i+7] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-  }
-  // deal with extra features (not currently being used as x_num_features is a
-  // multiple of 8)
-  for (; i < num_features; i++) {
-    features_buffer[i] = (t_float)1.0 - current_phase * recip;
-    current_phase += example_freq * features_conv;
-  }
-}
-
-#pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void populate_features_binary(t_nnlfo *x,
-                                        t_float example_freq,
-                                        double current_phase) {
-  double features_conv = x->x_features_conv;
-  int num_features = x->x_num_features;
-  t_float pw = x->x_example_pw;
-  int features_unroll_limit = num_features - 8;
-  t_float *features_buffer = x->x_input_features;
-
-  int i = 0;
-  #pragma GCC ivdep
-  for (; i <= features_unroll_limit; i += 8) {
-    features_buffer[i] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-    features_buffer[i+1] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-    features_buffer[i+2] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-    features_buffer[i+3] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-    features_buffer[i+4] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-    features_buffer[i+5] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-    features_buffer[i+6] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-    features_buffer[i+7] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-  }
-  for (; i < num_features; i++) {
-    features_buffer[i] = (current_phase < pw) ? (t_float)1.0 : (t_float)0.0;
-    current_phase += example_freq * features_conv;
-    current_phase -= floor(current_phase);
-  }
-}
-
-#pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void calculate_dz(t_nnlfo *x, t_layer *layer) {
   int is_relu = layer->l_activation == ACTIVATION_RELU;
   int n = layer->l_n;
+  int batch_size = x->x_batch_size;
   t_float leak = x->x_leak;
   int n_unroll_limit = n - 8;
 
   #define ACTIVATION_DERIVATIVE(z) \
     (is_relu ? ((z > 0) ? 1.0f : leak) : 1.0f)
+  // for "batch as outer dimension" layout
+  #define BATCH_IDX(batch, stride, idx) ((batch) * (stride) + (idx))
 
-  int i = 0;
-  for (; i <= n_unroll_limit; i += 8) {
-    if (i + 8 < n) {
-      __builtin_prefetch(&layer->l_da[i+8], 0, 3);
-      __builtin_prefetch(&layer->l_z_cache[i+8], 0, 3);
+  for (int j = 0; j < batch_size; j++) {
+    int batch_offset = j * n;  // Offset to the start of this batch example
+
+    int i = 0;
+    #pragma GCC ivdep
+    for (; i <= n_unroll_limit; i += 8) {
+      // re the use of i+16, CPUs load memory in fixed size blocks called cache
+      // lines (typically 64 bytes or 16 float values), so i+8 can be assumed to
+      // have been loaded on the first iteration of the loop
+      if (i + 16 < n) {
+        __builtin_prefetch(&layer->l_da[batch_offset + i + 16], 0, 3);
+        __builtin_prefetch(&layer->l_z_cache[batch_offset + i + 16], 0, 3);
+      }
+
+      layer->l_dz[BATCH_IDX(j, n, i)] = 
+          layer->l_da[BATCH_IDX(j, n, i)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i)]);
+      layer->l_dz[BATCH_IDX(j, n, i+1)] = 
+          layer->l_da[BATCH_IDX(j, n, i+1)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i+1)]);
+      layer->l_dz[BATCH_IDX(j, n, i+2)] = 
+          layer->l_da[BATCH_IDX(j, n, i+2)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i+2)]);
+      layer->l_dz[BATCH_IDX(j, n, i+3)] = 
+          layer->l_da[BATCH_IDX(j, n, i+3)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i+3)]);
+      layer->l_dz[BATCH_IDX(j, n, i+4)] = 
+          layer->l_da[BATCH_IDX(j, n, i+4)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i+4)]);
+      layer->l_dz[BATCH_IDX(j, n, i+5)] = 
+          layer->l_da[BATCH_IDX(j, n, i+5)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i+5)]);
+      layer->l_dz[BATCH_IDX(j, n, i+6)] = 
+          layer->l_da[BATCH_IDX(j, n, i+6)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i+6)]);
+      layer->l_dz[BATCH_IDX(j, n, i+7)] = 
+          layer->l_da[BATCH_IDX(j, n, i+7)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i+7)]);
     }
-    
-    layer->l_dz[i] = layer->l_da[i] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i]);
-    layer->l_dz[i+1] = layer->l_da[i+1] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+1]);
-    layer->l_dz[i+2] = layer->l_da[i+2] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+2]);
-    layer->l_dz[i+3] = layer->l_da[i+3] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+3]);
-    layer->l_dz[i+4] = layer->l_da[i+4] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+4]);
-    layer->l_dz[i+5] = layer->l_da[i+5] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+5]);
-    layer->l_dz[i+6] = layer->l_da[i+6] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+6]);
-    layer->l_dz[i+7] = layer->l_da[i+7] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i+7]);
-  }
 
-  // handle remaining elements (or layers where n < 8)
-  for (; i < n; i++) {
-    layer->l_dz[i] = layer->l_da[i] * ACTIVATION_DERIVATIVE(layer->l_z_cache[i]);
+    for (; i < n; i++) {
+      layer->l_dz[BATCH_IDX(j, n, i)] = 
+          layer->l_da[BATCH_IDX(j, n, i)] * 
+          ACTIVATION_DERIVATIVE(layer->l_z_cache[BATCH_IDX(j, n, i)]);
+    }
   }
 
   #undef ACTIVATION_DERIVATIVE
+  #undef BATCH_IDX
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void calculate_db(t_nnlfo *x, int l, t_layer *layer) {
   int n = layer->l_n;
-
-  // special case for output layer
-  if (l == x->x_num_layers - 1 && n == 1) {
-    // db = dz
-    layer->l_db[0] = layer->l_dz[0];
-    return;
-  }
-
+  int batch_size = x->x_batch_size;
   int n_unroll_limit = n - 8;
+  t_float batch_scale = x->x_batch_scale;
+
+  memset(layer->l_db, 0, sizeof(t_float) * n);
+
+  for (int b = 0; b < batch_size; b++) {
+    int batch_offset = b * n;
+    int i = 0;
+    #pragma GCC ivdep
+    for (; i <= n_unroll_limit; i += 8) {
+      if (i + 16 < n) {
+        __builtin_prefetch(&layer->l_dz[batch_offset + i + 16], 0, 3);
+      }
+      layer->l_db[i] += layer->l_dz[batch_offset + i];
+      layer->l_db[i+1] += layer->l_dz[batch_offset + i + 1];
+      layer->l_db[i+2] += layer->l_dz[batch_offset + i + 2];
+      layer->l_db[i+3] += layer->l_dz[batch_offset + i + 3];
+      layer->l_db[i+4] += layer->l_dz[batch_offset + i + 4];
+      layer->l_db[i+5] += layer->l_dz[batch_offset + i + 5];
+      layer->l_db[i+6] += layer->l_dz[batch_offset + i + 6];
+      layer->l_db[i+7] += layer->l_dz[batch_offset + i + 7];
+    }
+
+    for (; i < n; i++) {
+      layer->l_db[i] += layer->l_dz[batch_offset + i];
+    }
+  }
 
   int i = 0;
   #pragma GCC ivdep
   for (; i <= n_unroll_limit; i += 8) {
-    if (i + 8 < n) {
-      __builtin_prefetch(&layer->l_dz[i+8], 0, 3);
+    if (i + 16 < n) {
+      __builtin_prefetch(&layer->l_db[i+16], 1, 3);
     }
-
-    layer->l_db[i]   = layer->l_dz[i];
-    layer->l_db[i+1] = layer->l_dz[i+1];
-    layer->l_db[i+2] = layer->l_dz[i+2];
-    layer->l_db[i+3] = layer->l_dz[i+3];
-    layer->l_db[i+4] = layer->l_dz[i+4];
-    layer->l_db[i+5] = layer->l_dz[i+5];
-    layer->l_db[i+6] = layer->l_dz[i+6];
-    layer->l_db[i+7] = layer->l_dz[i+7];
+    layer->l_db[i] *= batch_scale;
+    layer->l_db[i+1] *= batch_scale;
+    layer->l_db[i+2] *= batch_scale;
+    layer->l_db[i+3] *= batch_scale;
+    layer->l_db[i+4] *= batch_scale;
+    layer->l_db[i+5] *= batch_scale;
+    layer->l_db[i+6] *= batch_scale;
+    layer->l_db[i+7] *= batch_scale;
   }
-
   for (; i < n; i++) {
-    layer->l_db[i] = layer->l_dz[i];
+    layer->l_db[i] *= batch_scale;
   }
 }
 
@@ -440,44 +400,46 @@ static void calculate_db(t_nnlfo *x, int l, t_layer *layer) {
 static void calculate_da_prev(t_nnlfo *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
+  int n_prev_unroll_limit = n_prev - 8;
+  int batch_size = x->x_batch_size;
   t_layer *prev_layer = &x->x_layers[l-1];
 
+  memset(prev_layer->l_da, 0, sizeof(t_float) * n_prev * batch_size);
 
-  // probably this could be changed to 8
-  int n_unroll_limit = n - 4;
+  for (int b = 0; b < batch_size; b++) {
+    int batch_offset_curr = b * n;
+    int batch_offset_prev = b * n_prev;
 
-  for (int k = 0; k < n_prev; k++) {
-    if (k + 1 < n_prev) {
-      __builtin_prefetch(&prev_layer->l_da[k+1], 1, 3);  // Note: write access (1)
-      
-      // Prefetch the next column of weights (scattered across memory)
-      for (int p = 0; p < n; p += 16) {
-        if (p + 16 < n) {
-          __builtin_prefetch(&layer->l_weights[(p+16)*n_prev+k+1], 0, 1);
+    for (int j = 0; j < n; j++) {
+      t_float dz_j = layer->l_dz[batch_offset_curr + j];
+
+      if (j + 2 < n) {
+        __builtin_prefetch(&layer->l_dz[batch_offset_curr + j + 2], 0, 3);
+      }
+
+      int weight_base_idx = j * n_prev;
+      int k = 0;
+      #pragma GCC ivdep
+      for (; k <= n_prev_unroll_limit; k += 8) {
+        if (k + 16 < n_prev) {
+          __builtin_prefetch(&layer->l_weights[weight_base_idx + k + 16], 0, 3);
+          __builtin_prefetch(&prev_layer->l_da[batch_offset_prev + k + 16], 1, 3);
         }
+
+        prev_layer->l_da[batch_offset_prev + k] += layer->l_weights[weight_base_idx + k] * dz_j;
+        prev_layer->l_da[batch_offset_prev + k+1] += layer->l_weights[weight_base_idx + k+1] * dz_j;
+        prev_layer->l_da[batch_offset_prev + k+2] += layer->l_weights[weight_base_idx + k+2] * dz_j;
+        prev_layer->l_da[batch_offset_prev + k+3] += layer->l_weights[weight_base_idx + k+3] * dz_j;
+        prev_layer->l_da[batch_offset_prev + k+4] += layer->l_weights[weight_base_idx + k+4] * dz_j;
+        prev_layer->l_da[batch_offset_prev + k+5] += layer->l_weights[weight_base_idx + k+5] * dz_j;
+        prev_layer->l_da[batch_offset_prev + k+6] += layer->l_weights[weight_base_idx + k+6] * dz_j;
+        prev_layer->l_da[batch_offset_prev + k+7] += layer->l_weights[weight_base_idx + k+7] * dz_j;
+      }
+
+      for (; k < n_prev; k++) {
+        prev_layer->l_da[batch_offset_prev + k] += layer->l_weights[weight_base_idx + k] * dz_j;
       }
     }
-
-    t_float sum = (t_float)0.0;
-
-    int i = 0;
-    for (; i <= n_unroll_limit; i += 4) {
-      if (i + 4 < n) {
-        __builtin_prefetch(&layer->l_weights[(i+4)*n_prev+k], 0, 3);
-        __builtin_prefetch(&layer->l_dz[i+4], 0, 3);
-      }
-
-      sum += layer->l_weights[i*n_prev+k] * layer->l_dz[i] +
-             layer->l_weights[(i+1)*n_prev+k] * layer->l_dz[i+1] +
-             layer->l_weights[(i+2)*n_prev+k] * layer->l_dz[i+2] +
-             layer->l_weights[(i+3)*n_prev+k] * layer->l_dz[i+3];
-    }
-
-    for (; i < n; i++) {
-      sum += layer->l_weights[i*n_prev+k] * layer->l_dz[i];
-    }
-
-    prev_layer->l_da[k] = sum;
   }
 }
 
@@ -485,60 +447,113 @@ static void calculate_da_prev(t_nnlfo *x, int l, t_layer *layer) {
 static void calculate_dw(t_nnlfo *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
+  int batch_size = x->x_batch_size;
   t_float *prev_activations = (l == 0) ? x->x_input_features : x->x_layers[l-1].l_a_cache;
-
   int n_prev_unroll_limit = n_prev - 8;
+  t_float batch_scale = x->x_batch_scale;
+  int total_weights = n * n_prev;
+  int weight_unroll_limit = total_weights - 8;
 
-  // clear previous gradients
   memset(layer->l_dw, 0, sizeof(t_float) * n * n_prev);
 
-  // outer loop (output neurons)
-  for (int i = 0; i < n; i++) {
-    // cache the neuron's dz to avoid repeated access
-    t_float dz_i = layer->l_dz[i];
+  for (int b = 0; b < batch_size; b++) {
+    int batch_offset_curr = b * n;
+    int batch_offset_prev = b * n_prev;
 
-    if (i + 1 < n) {
-      __builtin_prefetch(&layer->l_dz[i+1], 0, 3);
-    }
+    for (int i = 0; i < n; i++) {
+      t_float dz_i = layer->l_dz[batch_offset_curr + i];
 
-    // inner loop (input neurons)
-    int j = 0;
-
-    #pragma GCC ivdep  // tells the compiler there are no loop-carried dependencies
-    for (; j <= n_prev_unroll_limit; j += 8) {
-      if (j + 8 < n_prev) {
-        __builtin_prefetch(&prev_activations[j+8], 0, 3);
+      // guessing a bit with the i+2 offset. the issue is related to "prefetch
+      // distance": prefetching by 1 might not provide enough load time (the
+      // inner loop might finish before the prefetch is complete)
+      if (i + 2 < n) {
+        __builtin_prefetch(&layer->l_dz[batch_offset_curr + i + 2], 0, 3);
       }
 
-      int idx = i * n_prev + j;
-      layer->l_dw[idx]     = dz_i * prev_activations[j];
-      layer->l_dw[idx + 1] = dz_i * prev_activations[j + 1];
-      layer->l_dw[idx + 2] = dz_i * prev_activations[j + 2];
-      layer->l_dw[idx + 3] = dz_i * prev_activations[j + 3];
-      layer->l_dw[idx + 4] = dz_i * prev_activations[j + 4];
-      layer->l_dw[idx + 5] = dz_i * prev_activations[j + 5];
-      layer->l_dw[idx + 6] = dz_i * prev_activations[j + 6];
-      layer->l_dw[idx + 7] = dz_i * prev_activations[j + 7];
+      int j = 0;
+      #pragma GCC ivdep
+      for (; j <= n_prev_unroll_limit; j += 8) {
+        if (j + 16 < n_prev) {
+          __builtin_prefetch(&prev_activations[batch_offset_prev + j + 16], 0, 3);
+        }
+
+        int idx = i * n_prev + j;
+        layer->l_dw[idx]     += dz_i * prev_activations[batch_offset_prev + j];
+        layer->l_dw[idx + 1] += dz_i * prev_activations[batch_offset_prev + j + 1];
+        layer->l_dw[idx + 2] += dz_i * prev_activations[batch_offset_prev + j + 2];
+        layer->l_dw[idx + 3] += dz_i * prev_activations[batch_offset_prev + j + 3];
+        layer->l_dw[idx + 4] += dz_i * prev_activations[batch_offset_prev + j + 4];
+        layer->l_dw[idx + 5] += dz_i * prev_activations[batch_offset_prev + j + 5];
+        layer->l_dw[idx + 6] += dz_i * prev_activations[batch_offset_prev + j + 6];
+        layer->l_dw[idx + 7] += dz_i * prev_activations[batch_offset_prev + j + 7];
+      }
+
+      for (; j < n_prev; j++) {
+        layer->l_dw[i * n_prev + j] += dz_i * prev_activations[batch_offset_prev + j];
+      }
+    }
+  }
+
+  int i = 0;
+  #pragma GCC ivdep
+  for (; i <= weight_unroll_limit; i += 8) {
+    if (i + 16 < total_weights) {
+      __builtin_prefetch(&layer->l_dw[i+16], 1, 3); // note: 1 = write hint
+    }
+    layer->l_dw[i] *= batch_scale;
+    layer->l_dw[i+1] *= batch_scale;
+    layer->l_dw[i+2] *= batch_scale;
+    layer->l_dw[i+3] *= batch_scale;
+    layer->l_dw[i+4] *= batch_scale;
+    layer->l_dw[i+5] *= batch_scale;
+    layer->l_dw[i+6] *= batch_scale;
+    layer->l_dw[i+7] *= batch_scale;
+
+  }
+  for (; i < n * n_prev; i++) {
+    layer->l_dw[i] *= batch_scale;
+  }
+}
+
+// note that the output layer always has 1 neuron
+#pragma GCC optimize("unroll-loops", "tree-vectorize")
+static void calculate_da_outer(t_nnlfo *x, t_layer *layer) {
+  int batch_size = x->x_batch_size;
+  int batch_size_unroll_limit = batch_size - 8;
+
+  int i = 0;
+  #pragma GCC ivdep
+  for (; i <= batch_size_unroll_limit; i += 8) {
+    // note the use of i+16 here and the prefetching of 16 items ahead
+    // see the references to cache lines in flattened_array_intuitions.md
+    // for details. I've been using prefetching inconsistently in the code so
+    // far
+    if (i + 16 < batch_size) {
+      __builtin_prefetch(&layer->l_a_cache[i+16], 0, 3);
+      __builtin_prefetch(&x->x_batch_labels[i+16], 0, 3);
     }
 
-    // handle any remaining weights
-    for (; j < n_prev; j++) {
-      layer->l_dw[i * n_prev + j] = dz_i * prev_activations[j];
-    }
+    layer->l_da[i] = layer->l_a_cache[i] - x->x_batch_labels[i];
+    layer->l_da[i+1] = layer->l_a_cache[i+1] - x->x_batch_labels[i+1];
+    layer->l_da[i+2] = layer->l_a_cache[i+2] - x->x_batch_labels[i+2];
+    layer->l_da[i+3] = layer->l_a_cache[i+3] - x->x_batch_labels[i+3];
+    layer->l_da[i+4] = layer->l_a_cache[i+4] - x->x_batch_labels[i+4];
+    layer->l_da[i+5] = layer->l_a_cache[i+5] - x->x_batch_labels[i+5];
+    layer->l_da[i+6] = layer->l_a_cache[i+6] - x->x_batch_labels[i+6];
+    layer->l_da[i+7] = layer->l_a_cache[i+7] - x->x_batch_labels[i+7];
+  }
+
+  for (; i < batch_size; i++) {
+    layer->l_da[i] = layer->l_a_cache[i] - x->x_batch_labels[i];
   }
 }
 
 static void layer_backward(t_nnlfo *x, int l, t_layer *layer) {
-  if (l == x->x_num_layers - 1) {
-    // calculate output layer da
-    // the output layer always has 1 neuron
-    layer->l_da[0] = layer->l_a_cache[0] - x->x_current_label;
-  }
+  if (l == x->x_num_layers - 1) calculate_da_outer(x, layer);
 
   calculate_dz(x, layer);
   calculate_dw(x, l, layer);
   calculate_db(x, l, layer);
-
   if (l > 0) calculate_da_prev(x, l, layer);
 }
 
@@ -727,12 +742,14 @@ static t_int *nnlfo_perform(t_int *w) {
     if (current_example_pulse != previous_example_pulse) example_bang = 1;
     if (current_label_pulse != previous_label_pulse) label_bang = 1;
 
+    // make predictions at example and label zero crossings
     if (current_example_pulse != previous_example_pulse || current_label_pulse != previous_label_pulse) {
       x->x_batch_labels[batch_idx] = current_label_pulse;
       populate_features_linear(x, example_freq, example_phase, batch_idx);
       if (features_filled) {
         model_forward(x);
-        y_hat = x->x_layers[output_layer].l_a_cache[0];
+        // output layer has 1 unit, so size = batch_idx
+        y_hat = x->x_layers[output_layer].l_a_cache[batch_idx];
         model_backward(x);
         update_parameters_adam(x);
       } else {
@@ -908,10 +925,10 @@ static void set_layer_dims(t_nnlfo *x) {
   x->x_layer_dims[0] = x->x_num_features;
   x->x_layer_dims[1] = x->x_num_features * 2;
   x->x_layer_dims[2] = x->x_num_features;
-  x->x_layer_dims[3] = x->x_num_features * 0.5;
-  x->x_layer_dims[4] = x->x_num_features * 0.25;
-  x->x_layer_dims[5] = x->x_num_features;
-  x->x_layer_dims[6] = x->x_num_features * 0.5;
+  x->x_layer_dims[3] = x->x_num_features;
+  x->x_layer_dims[4] = x->x_num_features;
+  x->x_layer_dims[5] = x->x_num_features * 0.5;
+  x->x_layer_dims[6] = x->x_num_features * 0.25;
   x->x_layer_dims[7] = 1;
 }
 
