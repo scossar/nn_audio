@@ -747,11 +747,10 @@ static t_int *nnlfo_perform(t_int *w) {
       x->x_batch_labels[batch_idx] = current_label_pulse;
       populate_features_linear(x, example_freq, example_phase, batch_idx);
       if (features_filled) {
-        model_forward(x);
-        // output layer has 1 unit, so size = batch_idx
+        // model_forward(x);
         y_hat = x->x_layers[output_layer].l_a_cache[batch_idx];
-        model_backward(x);
-        update_parameters_adam(x);
+        // model_backward(x);
+        // update_parameters_adam(x);
       } else {
         features_filled = batch_idx == batch_idx_mask;
       }
@@ -767,6 +766,11 @@ static t_int *nnlfo_perform(t_int *w) {
     previous_example_pulse = current_example_pulse;
     previous_label_pulse = current_label_pulse;
   }
+
+  // it works surprisingly well calling it here:
+  model_forward(x);
+  model_backward(x);
+  update_parameters_adam(x);
 
   x->x_batch_index = batch_idx;
   x->x_features_filled = features_filled;
@@ -859,6 +863,11 @@ static void set_lambda(t_nnlfo *x, t_floatarg f) {
   x->x_lambda = (f < (t_float)0.0) ? (t_float)0.0 : f;
 }
 
+static void set_batch_size(t_nnlfo *x, t_floatarg f) {
+  f = f > 0 ? f : 8;
+  x->x_batch_size = f;
+}
+
 void nnlfo_tilde_setup(void) {
   nnlfo_class = class_new(gensym("nnlfo~"),
                           (t_newmethod)nnlfo_new,
@@ -873,6 +882,7 @@ void nnlfo_tilde_setup(void) {
   class_addmethod(nnlfo_class, (t_method)set_lambda, gensym("lambda"), A_FLOAT, 0);
   class_addmethod(nnlfo_class, (t_method)set_beta_1, gensym("beta_1"), A_FLOAT, 0);
   class_addmethod(nnlfo_class, (t_method)set_beta_2, gensym("beta_2"), A_FLOAT, 0);
+  class_addmethod(nnlfo_class, (t_method)set_batch_size, gensym("batch_size"), A_FLOAT, 0);
 
   class_addmethod(nnlfo_class, (t_method)set_phase_representation, gensym("phase_representation"),
                   A_SYMBOL, 0);
