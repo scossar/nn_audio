@@ -9,6 +9,7 @@
  * - phasor_implementation.md
  * - optimization_techniques_for_dsp_code.md
  * - nnlfo_phase_relationships.md
+ * - flattened_array_intuitions.md
  **/
 
 // only handles relu and linear
@@ -566,139 +567,128 @@ static void model_backward(t_nnlfo *x) {
 
 // Fast inverse square root (Quake III algorithm) (modified)
 static inline float fast_inv_sqrt(float number) {
-    float y = number;
-    float x2 = y * 0.5F;
+  float y = number;
+  float x2 = y * 0.5F;
 
-    // Use a union for type punning (avoids strict aliasing violations)
-    union {
-        float f;
-        int32_t i;  // Use int32_t for portability
-    } conv;
+  // Use a union for type punning (avoids strict aliasing violations)
+  union {
+    float f;
+    int32_t i;  // Use int32_t for portability
+  } conv;
 
-    conv.f = y;
-    conv.i = 0x5f3759df - (conv.i >> 1);
-    y = conv.f;
+  conv.f = y;
+  conv.i = 0x5f3759df - (conv.i >> 1);
+  y = conv.f;
 
-    // One Newton-Raphson iteration
-    y = y * (1.5F - (x2 * y * y));
+  // One Newton-Raphson iteration
+  y = y * (1.5F - (x2 * y * y));
 
-    return y;
+  return y;
+}
+
+static inline float faster_inv_sqrt(float number) {
+  union {
+    float f;
+    int32_t i;
+  } conv;
+  
+  conv.f = number;
+  conv.i = 0x5f3759df - (conv.i >> 1);
+  
+  return conv.f; // Skip the Newton-Raphson iteration
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
 static void update_parameters_adam(t_nnlfo *x) {
-    const float beta1 = x->x_beta_1;
-    const float beta2 = x->x_beta_2;
-    const float one_minus_beta1 = (t_float)1.0 - beta1;
-    const float one_minus_beta2 = (t_float)1.0 - beta2;
-    const float alpha = x->x_alpha;
-    const float epsilon = (t_float)1e-8;
-    const float weight_decay_factor = (t_float)1.0 - alpha * x->x_lambda;
+  const t_float beta1 = x->x_beta_1;
+  const t_float beta2 = x->x_beta_2;
+  const t_float one_minus_beta1 = (t_float)1.0 - beta1;
+  const t_float one_minus_beta2 = (t_float)1.0 - beta2;
+  const t_float alpha = x->x_alpha;
+  const t_float epsilon = (t_float)1e-8;
+  const t_float weight_decay_factor = (t_float)1.0 - alpha * x->x_lambda;
 
-    for (int l = 0; l < x->x_num_layers; l++) {
-        t_layer *layer = &x->x_layers[l];
-        if (l + 1 < x->x_num_layers) {
-            __builtin_prefetch(&x->x_layers[l+1], 0, 3);
-        }
-
-        int n = layer->l_n;
-        int n_prev = layer->l_n_prev;
-        int num_weights = n * n_prev;
-        int weights_unroll_limit = num_weights - 8;
-        int biases_unroll_limit = n - 8;
-
-        // Process weights
-        int j = 0;
-        #pragma GCC ivdep
-        for (; j <= weights_unroll_limit; j += 8) {
-            if (j + 8 < num_weights) {
-                __builtin_prefetch(&layer->l_weights[j+8], 1, 3);
-                __builtin_prefetch(&layer->l_dw[j+8], 0, 3);
-                __builtin_prefetch(&layer->l_v_dw[j+8], 1, 3);
-                __builtin_prefetch(&layer->l_s_dw[j+8], 1, 3);
-            }
-
-            // Unrolled loop for 8 elements at a time
-            for (int k = 0; k < 8; k++) {
-                int idx = j + k;
-                float dw = layer->l_dw[idx];
-
-                // Update momentum
-                layer->l_v_dw[idx] = beta1 * layer->l_v_dw[idx] + one_minus_beta1 * dw;
-
-                // Update squared gradient accumulation
-                layer->l_s_dw[idx] = beta2 * layer->l_s_dw[idx] + one_minus_beta2 * dw * dw;
-
-                // Compute update
-                float update = alpha * layer->l_v_dw[idx] * fast_inv_sqrt(layer->l_s_dw[idx] + epsilon);
-
-                // Apply update with weight decay
-                layer->l_weights[idx] = weight_decay_factor * layer->l_weights[idx] - update;
-            }
-        }
-
-        // Handle remaining weights
-        for (; j < num_weights; j++) {
-            float dw = layer->l_dw[j];
-
-            // Update momentum
-            layer->l_v_dw[j] = beta1 * layer->l_v_dw[j] + one_minus_beta1 * dw;
-
-            // Update squared gradient accumulation
-            layer->l_s_dw[j] = beta2 * layer->l_s_dw[j] + one_minus_beta2 * dw * dw;
-
-            // Compute update
-            float update = alpha * layer->l_v_dw[j] * fast_inv_sqrt(layer->l_s_dw[j] + epsilon);
-
-            // Apply update with weight decay
-            layer->l_weights[j] = weight_decay_factor * layer->l_weights[j] - update;
-        }
-
-        int k = 0;
-        #pragma GCC ivdep
-        for (; k <= biases_unroll_limit; k += 8) {
-            if (k + 8 < n) {
-                __builtin_prefetch(&layer->l_biases[k+8], 1, 3);
-                __builtin_prefetch(&layer->l_db[k+8], 0, 3);
-                __builtin_prefetch(&layer->l_v_db[k+8], 1, 3);
-                __builtin_prefetch(&layer->l_s_db[k+8], 1, 3);
-            }
-
-            // Unrolled loop for biases
-            for (int i = 0; i < 8; i++) {
-                int idx = k + i;
-                float db = layer->l_db[idx];
-
-                // Update momentum
-                layer->l_v_db[idx] = beta1 * layer->l_v_db[idx] + one_minus_beta1 * db;
-
-                // Update squared gradient accumulation
-                layer->l_s_db[idx] = beta2 * layer->l_s_db[idx] + one_minus_beta2 * db * db;
-
-                // Compute update
-                float update = alpha * layer->l_v_db[idx] * fast_inv_sqrt(layer->l_s_db[idx] + epsilon);
-
-                // Apply update (biases typically don't use weight decay)
-                layer->l_biases[idx] -= update;
-            }
-        }
-
-        for (; k < n; k++) {
-            float db = layer->l_db[k];
-
-            // Update momentum
-            layer->l_v_db[k] = beta1 * layer->l_v_db[k] + one_minus_beta1 * db;
-
-            // Update squared gradient accumulation
-            layer->l_s_db[k] = beta2 * layer->l_s_db[k] + one_minus_beta2 * db * db;
-
-            // Compute update
-            float update = alpha * layer->l_v_db[k] * fast_inv_sqrt(layer->l_s_db[k] + epsilon);
-
-            // Apply update
-            layer->l_biases[k] -= update;
-        }
+  for (int l = 0; l < x->x_num_layers; l++) {
+    t_layer *layer = &x->x_layers[l];
+    // guessing a bit here with prefetching ahead by 2
+    if (l + 2 < x->x_num_layers) {
+        __builtin_prefetch(&x->x_layers[l+2], 0, 3);
     }
+
+    int n = layer->l_n;
+    int n_prev = layer->l_n_prev;
+    int num_weights = n * n_prev;
+    int weights_unroll_limit = num_weights - 8;
+    int biases_unroll_limit = n - 8;
+
+    int j = 0;
+    #pragma GCC ivdep
+    for (; j <= weights_unroll_limit; j += 8) {
+      if (j + 16 < num_weights) {
+        __builtin_prefetch(&layer->l_weights[j+16], 1, 3);
+        __builtin_prefetch(&layer->l_dw[j+16], 0, 3);
+        __builtin_prefetch(&layer->l_v_dw[j+16], 1, 3);
+        __builtin_prefetch(&layer->l_s_dw[j+16], 1, 3);
+      }
+
+      for (int k = 0; k < 8; k++) {
+        int idx = j + k;
+        t_float dw = layer->l_dw[idx];
+
+        layer->l_v_dw[idx] = beta1 * layer->l_v_dw[idx] + one_minus_beta1 * dw;
+        layer->l_s_dw[idx] = beta2 * layer->l_s_dw[idx] + one_minus_beta2 * dw * dw;
+
+        t_float update = alpha * layer->l_v_dw[idx] * faster_inv_sqrt(layer->l_s_dw[idx] + epsilon);
+
+        layer->l_weights[idx] = weight_decay_factor * layer->l_weights[idx] - update;
+      }
+    }
+
+    for (; j < num_weights; j++) {
+      t_float dw = layer->l_dw[j];
+
+      layer->l_v_dw[j] = beta1 * layer->l_v_dw[j] + one_minus_beta1 * dw;
+      layer->l_s_dw[j] = beta2 * layer->l_s_dw[j] + one_minus_beta2 * dw * dw;
+
+      t_float update = alpha * layer->l_v_dw[j] * faster_inv_sqrt(layer->l_s_dw[j] + epsilon);
+
+      layer->l_weights[j] = weight_decay_factor * layer->l_weights[j] - update;
+    }
+
+    int k = 0;
+    #pragma GCC ivdep
+    for (; k <= biases_unroll_limit; k += 8) {
+      if (k + 16 < n) {
+        __builtin_prefetch(&layer->l_biases[k+16], 1, 3);
+        __builtin_prefetch(&layer->l_db[k+16], 0, 3);
+        __builtin_prefetch(&layer->l_v_db[k+16], 1, 3);
+        __builtin_prefetch(&layer->l_s_db[k+16], 1, 3);
+      }
+
+      for (int i = 0; i < 8; i++) {
+        int idx = k + i;
+        t_float db = layer->l_db[idx];
+
+        layer->l_v_db[idx] = beta1 * layer->l_v_db[idx] + one_minus_beta1 * db;
+        layer->l_s_db[idx] = beta2 * layer->l_s_db[idx] + one_minus_beta2 * db * db;
+
+        t_float update = alpha * layer->l_v_db[idx] * faster_inv_sqrt(layer->l_s_db[idx] + epsilon);
+
+        layer->l_biases[idx] -= update;
+      }
+    }
+
+    for (; k < n; k++) {
+      t_float db = layer->l_db[k];
+
+      layer->l_v_db[k] = beta1 * layer->l_v_db[k] + one_minus_beta1 * db;
+      layer->l_s_db[k] = beta2 * layer->l_s_db[k] + one_minus_beta2 * db * db;
+
+      t_float update = alpha * layer->l_v_db[k] * faster_inv_sqrt(layer->l_s_db[k] + epsilon);
+
+      layer->l_biases[k] -= update;
+    }
+  }
 }
 
 static t_int *nnlfo_perform(t_int *w) {
