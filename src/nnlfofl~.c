@@ -21,35 +21,6 @@
 #define HANDLE_ACTIVATION(z) \
   (is_relu ? ((z > 0) ? z : z * leak) : z)
 
-#define NOISETABLE_SIZE 1024
-static float *noisetable = NULL;
-static int noisetable_reference_count = 0;
-
-static void noisetable_init(void) {
-  if (noisetable == NULL) {
-    noisetable = (float *)getbytes(sizeof(float) * NOISETABLE_SIZE);
-    if (noisetable) {
-      for (int i = 0; i < NOISETABLE_SIZE; i++) {
-        noisetable[i] = (float)(rand() / (float)RAND_MAX) * 2 - 1;
-      }
-      post("nnlfo~: initialized noise table of size %d", NOISETABLE_SIZE);
-    } else {
-      post("nnlfo~: failed to allocate memory to noise table");
-      return;
-    }
-  }
-  noisetable_reference_count++;
-}
-
-static void noisetable_free(void) {
-  noisetable_reference_count--;
-  if (noisetable_reference_count <= 0 && noisetable != NULL) {
-    freebytes(noisetable, sizeof(float) * NOISETABLE_SIZE);
-    noisetable = NULL;
-    post("nnlfo~: freed noise table");
-    noisetable_reference_count = 0; // just in case
-  }
-}
 
 typedef enum {
   ACTIVATION_LINEAR,
@@ -82,7 +53,7 @@ typedef struct _layer {
   t_float *l_da;
 } t_layer;
 
-typedef struct _nnlfo {
+typedef struct _nnlfofl {
   t_object x_obj;
 
   t_layer *x_layers;
@@ -93,12 +64,12 @@ typedef struct _nnlfo {
   t_phase_representation x_phase_rep;
 
   t_float x_f;
-  double x_conv;
+  t_float x_conv;
 
   t_float x_example_freq;
-  double x_features_conv;
-  double x_example_phase;
-  double x_example_pw;
+  t_float x_features_conv;
+  t_float x_example_phase;
+  t_float x_example_pw;
   t_float x_previous_example;
   t_float x_previous_example_pulse;
 
@@ -112,9 +83,8 @@ typedef struct _nnlfo {
   t_float x_batch_scale;
 
   t_float x_label_freq;
-  // double x_label_conv;
-  double x_label_phase;
-  double x_label_pw;
+  t_float x_label_phase;
+  t_float x_label_pw;
   t_float x_current_label;
   t_float x_previous_label;
   t_float x_previous_label_pulse;
@@ -130,26 +100,22 @@ typedef struct _nnlfo {
   t_float x_beta_1;
   t_float x_beta_2;
 
-  int x_param_distortion_enabled;
-  t_float x_param_distortion_scale;
-  int x_param_distortion_index;
-
   t_inlet *x_example_freq_inlet;
   t_inlet *x_label_freq_inlet;
   t_outlet *x_prediction_outlet;
   t_outlet *x_example_bang_out, *x_label_bang_out;
-} t_nnlfo;
+} t_nnlfofl;
 
-static t_class *nnlfo_class = NULL;
+static t_class *nnlfofl_class = NULL;
 
-static void set_layer_dims(t_nnlfo *x);
-static void initialize_layers(t_nnlfo *x);
-static void nnlfo_free(t_nnlfo *x);
-static void init_layer_weights(t_nnlfo *x, int l);
-static void init_layer_biases(t_nnlfo *x, int l);
+static void set_layer_dims(t_nnlfofl *x);
+static void initialize_layers(t_nnlfofl *x);
+static void nnlfofl_free(t_nnlfofl *x);
+static void init_layer_weights(t_nnlfofl *x, int l);
+static void init_layer_biases(t_nnlfofl *x, int l);
 
-static void *nnlfo_new(void) {
-  t_nnlfo *x = (t_nnlfo *)pd_new(nnlfo_class);
+static void *nnlfofl_new(void) {
+  t_nnlfofl *x = (t_nnlfofl *)pd_new(nnlfofl_class);
 
   x->x_layers = NULL;
   x->x_batch_labels = NULL;
@@ -159,25 +125,20 @@ static void *nnlfo_new(void) {
   x->x_phase_rep = PHASE_LINEAR;
   x->x_freeze = 0;
 
-  noisetable_init();
-  x->x_param_distortion_enabled = 0;
-  x->x_param_distortion_scale = (t_float)0.00001;
-  x->x_param_distortion_index = 0;
-
   x->x_layer_dims = (int *)getbytes(sizeof(int) * x->x_num_layers + 1);
   if (!x->x_layer_dims) {
-    pd_error(x, "nnlfo~: failed to allocate memory for layer_dims");
+    pd_error(x, "nnlfofl~: failed to allocate memory for layer_dims");
     return NULL;
   }
   set_layer_dims(x);
 
   x->x_f = (t_float)1.0;
-  x->x_conv = (double)0.0;
+  x->x_conv = (t_float)0.0;
 
   x->x_example_freq = (t_float)1.0;
-  x->x_features_conv = (double)0.0;
-  x->x_example_phase = (double)0.0;
-  x->x_example_pw = (double)0.5;
+  x->x_features_conv = (t_float)0.0;
+  x->x_example_phase = (t_float)0.0;
+  x->x_example_pw = (t_float)0.5;
   x->x_previous_example = (t_float)0.0;
   x->x_previous_example_pulse = (t_float)0.0;
 
@@ -185,14 +146,14 @@ static void *nnlfo_new(void) {
   x->x_batch_scale = (t_float)1.0 / (t_float)x->x_batch_size;
   x->x_batch_labels = getbytes(sizeof(t_float) * x->x_batch_size);
   if (!x->x_batch_labels) {
-    pd_error(x, "nnlfo~: failed to allocate memory for batch_labels");
+    pd_error(x, "nnlfofl~: failed to allocate memory for batch_labels");
   }
   x->x_batch_index = 0;
   x->x_features_filled = 0;
 
   x->x_label_freq = (t_float)1.0;
-  x->x_label_phase = (double)0.0;
-  x->x_label_pw = (double)0.5;
+  x->x_label_phase = (t_float)0.0;
+  x->x_label_pw = (t_float)0.5;
   x->x_current_label = (t_float)0.0;
   x->x_previous_label = (t_float)0.0;
   x->x_previous_label_pulse = (t_float)0.0;
@@ -201,7 +162,7 @@ static void *nnlfo_new(void) {
 
   x->x_input_features = getbytes(sizeof(t_float) * x->x_num_features * x->x_batch_size);
   if (!x->x_input_features) {
-    pd_error(x, "nnlfo~: failed to allocate memory for input_features");
+    pd_error(x, "nnlfofl~: failed to allocate memory for input_features");
     return NULL;
   }
 
@@ -235,7 +196,7 @@ static void *nnlfo_new(void) {
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void layer_forward(t_nnlfo *x, t_layer *layer, t_float *input_buffer) {
+static void layer_forward(t_nnlfofl *x, t_layer *layer, t_float *input_buffer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
   int n_prev_unroll_limit = n_prev - 8;
@@ -276,7 +237,7 @@ static void layer_forward(t_nnlfo *x, t_layer *layer, t_float *input_buffer) {
   }
 }
 
-static void model_forward(t_nnlfo *x) {
+static void model_forward(t_nnlfofl *x) {
   for (int l = 0; l < x->x_num_layers; l++) {
     t_layer *layer = &x->x_layers[l];
     t_float *input = (l == 0) ? x->x_input_features : x->x_layers[l-1].l_a_cache;
@@ -286,11 +247,11 @@ static void model_forward(t_nnlfo *x) {
 
 // see audio_neural_network_optimizations.md for more optimizations
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void populate_features_linear(t_nnlfo *x,
+static void populate_features_linear(t_nnlfofl *x,
                                         t_float example_freq,
-                                        double current_phase,
+                                        t_float current_phase,
                                         int batch_idx) {
-  double features_conv = x->x_features_conv;
+  t_float features_conv = x->x_features_conv;
   int num_features = x->x_num_features;
   int features_unroll_limit = num_features - 8;
   t_float *features_buffer = x->x_input_features + (batch_idx * num_features);
@@ -326,7 +287,7 @@ static void populate_features_linear(t_nnlfo *x,
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void calculate_dz(t_nnlfo *x, t_layer *layer) {
+static void calculate_dz(t_nnlfofl *x, t_layer *layer) {
   int is_relu = layer->l_activation == ACTIVATION_RELU;
   int n = layer->l_n;
   int batch_size = x->x_batch_size;
@@ -390,7 +351,7 @@ static void calculate_dz(t_nnlfo *x, t_layer *layer) {
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void calculate_db(t_nnlfo *x, int l, t_layer *layer) {
+static void calculate_db(t_nnlfofl *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int batch_size = x->x_batch_size;
   int n_unroll_limit = n - 8;
@@ -442,7 +403,7 @@ static void calculate_db(t_nnlfo *x, int l, t_layer *layer) {
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void calculate_da_prev(t_nnlfo *x, int l, t_layer *layer) {
+static void calculate_da_prev(t_nnlfofl *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
   int n_prev_unroll_limit = n_prev - 8;
@@ -489,7 +450,7 @@ static void calculate_da_prev(t_nnlfo *x, int l, t_layer *layer) {
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void calculate_dw(t_nnlfo *x, int l, t_layer *layer) {
+static void calculate_dw(t_nnlfofl *x, int l, t_layer *layer) {
   int n = layer->l_n;
   int n_prev = layer->l_n_prev;
   int batch_size = x->x_batch_size;
@@ -562,7 +523,7 @@ static void calculate_dw(t_nnlfo *x, int l, t_layer *layer) {
 
 // note that the output layer always has 1 neuron
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void calculate_da_outer(t_nnlfo *x, t_layer *layer) {
+static void calculate_da_outer(t_nnlfofl *x, t_layer *layer) {
   int batch_size = x->x_batch_size;
   int batch_size_unroll_limit = batch_size - 8;
 
@@ -593,7 +554,7 @@ static void calculate_da_outer(t_nnlfo *x, t_layer *layer) {
   }
 }
 
-static void layer_backward(t_nnlfo *x, int l, t_layer *layer) {
+static void layer_backward(t_nnlfofl *x, int l, t_layer *layer) {
   if (l == x->x_num_layers - 1) calculate_da_outer(x, layer);
 
   calculate_dz(x, layer);
@@ -602,7 +563,7 @@ static void layer_backward(t_nnlfo *x, int l, t_layer *layer) {
   if (l > 0) calculate_da_prev(x, l, layer);
 }
 
-static void model_backward(t_nnlfo *x) {
+static void model_backward(t_nnlfofl *x) {
   for (int l = x->x_num_layers - 1; l >= 0; l--) {
     t_layer *layer = &x->x_layers[l];
     layer_backward(x, l, layer);
@@ -644,7 +605,7 @@ static inline float faster_inv_sqrt(float number) {
 }
 
 #pragma GCC optimize("unroll-loops", "tree-vectorize")
-static void update_parameters_adam(t_nnlfo *x) {
+static void update_parameters_adam(t_nnlfofl *x) {
   const t_float beta1 = x->x_beta_1;
   const t_float beta2 = x->x_beta_2;
   const t_float one_minus_beta1 = (t_float)1.0 - beta1;
@@ -652,9 +613,6 @@ static void update_parameters_adam(t_nnlfo *x) {
   const t_float alpha = x->x_alpha;
   const t_float epsilon = (t_float)1e-8;
   const t_float weight_decay_factor = (t_float)1.0 - alpha * x->x_lambda;
-  const int distortion_enabled = x->x_param_distortion_enabled;
-  const t_float distortion_scale = x->x_param_distortion_scale;
-  const int distortion_table_mask = NOISETABLE_SIZE - 1;
 
   for (int l = 0; l < x->x_num_layers; l++) {
     t_layer *layer = &x->x_layers[l];
@@ -688,20 +646,10 @@ static void update_parameters_adam(t_nnlfo *x) {
 
         t_float update = alpha * layer->l_v_dw[idx] * fast_inv_sqrt(layer->l_s_dw[idx] + epsilon);
 
-        if (distortion_enabled) {
-          update += noisetable[(x->x_param_distortion_index + k) & distortion_table_mask] *
-            distortion_scale;
-        }
-
         layer->l_weights[idx] = weight_decay_factor * layer->l_weights[idx] - update;
-      }
-      // updating the index here to try to not invalidate the ivdep directive
-      if (distortion_enabled) {
-        x->x_param_distortion_index = (x->x_param_distortion_index + 8) & distortion_table_mask;
       }
     }
 
-    // intentionally not bothering with distortion here
     for (; j < num_weights; j++) {
       t_float dw = layer->l_dw[j];
 
@@ -732,17 +680,7 @@ static void update_parameters_adam(t_nnlfo *x) {
 
         t_float update = alpha * layer->l_v_db[idx] * fast_inv_sqrt(layer->l_s_db[idx] + epsilon);
 
-        if (distortion_enabled) {
-          update += noisetable[(x->x_param_distortion_index + k) & distortion_table_mask] *
-            distortion_scale;
-          x->x_param_distortion_index = (x->x_param_distortion_index + 1) & distortion_table_mask;
-        }
-
         layer->l_biases[idx] -= update;
-      }
-      // updating the index here to try to not invalidate the ivdep directive
-      if (distortion_enabled) {
-        x->x_param_distortion_index = (x->x_param_distortion_index + 8) & distortion_table_mask;
       }
     }
 
@@ -759,21 +697,21 @@ static void update_parameters_adam(t_nnlfo *x) {
   }
 }
 
-static t_int *nnlfo_perform(t_int *w) {
-  t_nnlfo *x = (t_nnlfo *)(w[1]);
+static t_int *nnlfofl_perform(t_int *w) {
+  t_nnlfofl *x = (t_nnlfofl *)(w[1]);
   t_sample *example_freq_in = (t_sample *)(w[2]);
   t_sample *label_freq_in = (t_sample *)(w[3]);
   t_sample *pred_out = (t_sample *)(w[4]);
   int n = (int)(w[5]);
 
-  double conv = x->x_conv;
+  t_float conv = x->x_conv;
   t_sample example_freq = x->x_example_freq;
   t_sample label_freq = x->x_label_freq;
 
-  double example_phase = x->x_example_phase;
-  double example_pw = x->x_example_pw;
-  double label_phase = x->x_label_phase;
-  double label_pw = x->x_label_pw;
+  t_float example_phase = x->x_example_phase;
+  t_float example_pw = x->x_example_pw;
+  t_float label_phase = x->x_label_phase;
+  t_float label_pw = x->x_label_pw;
 
   t_float previous_example_pulse = x->x_previous_example_pulse;
   t_float previous_label_pulse = x->x_previous_label_pulse;
@@ -800,12 +738,15 @@ static t_int *nnlfo_perform(t_int *w) {
     if (current_example_pulse != previous_example_pulse) example_bang = 1;
     if (current_label_pulse != previous_label_pulse) label_bang = 1;
 
-    // update features and make predictions at example and label zero crossings
+    // make predictions at example and label zero crossings
     if (current_example_pulse != previous_example_pulse || current_label_pulse != previous_label_pulse) {
       x->x_batch_labels[batch_idx] = current_label_pulse;
       populate_features_linear(x, example_freq, example_phase, batch_idx);
       if (features_filled) {
+        // model_forward(x);
         y_hat = x->x_layers[output_layer].l_a_cache[batch_idx];
+        // model_backward(x);
+        // update_parameters_adam(x);
       } else {
         features_filled = batch_idx == batch_idx_mask;
       }
@@ -822,12 +763,10 @@ static t_int *nnlfo_perform(t_int *w) {
     previous_label_pulse = current_label_pulse;
   }
 
-  // run forward/back prop after every block of samples
-  if (!x->x_freeze) {
-    model_forward(x);
-    model_backward(x);
-    update_parameters_adam(x);
-  }
+  // it works surprisingly well calling it here:
+  model_forward(x);
+  model_backward(x);
+  update_parameters_adam(x);
 
   x->x_batch_index = batch_idx;
   x->x_features_filled = features_filled;
@@ -845,18 +784,18 @@ static t_int *nnlfo_perform(t_int *w) {
   return (w+6);
 }
 
-static void nnlfo_dsp(t_nnlfo *x, t_signal **sp) {
+static void nnlfofl_dsp(t_nnlfofl *x, t_signal **sp) {
   // freq * conv:
   // at 1Hz, increment by 1 sample for each step, at 2Hz increment by 2 samples,
   // etc
-  x->x_conv = (double)1.0 / (double)sp[0]->s_sr;
+  x->x_conv = (t_float)1.0 / (t_float)sp[0]->s_sr;
   // number of samples per feature at 1Hz
   x->x_feature_samps = (int)(sp[0]->s_sr / x->x_num_features);
   x->x_features_conv = x->x_conv * x->x_feature_samps;
-  dsp_add(nnlfo_perform, 5, x, sp[0]->s_vec, sp[1]->s_vec, sp[2]->s_vec, sp[0]->s_length);
+  dsp_add(nnlfofl_perform, 5, x, sp[0]->s_vec, sp[1]->s_vec, sp[2]->s_vec, sp[0]->s_length);
 }
 
-static void reset_model(t_nnlfo *x) {
+static void reset_model(t_nnlfofl *x) {
   int batch_size = x->x_batch_size;
 
   for (int l = 0; l < x->x_num_layers; l++) {
@@ -883,14 +822,14 @@ static void reset_model(t_nnlfo *x) {
   }
   memset(x->x_batch_labels, 0, sizeof(t_float) * batch_size);
   memset(x->x_input_features, 0, sizeof(t_float) * batch_size * x->x_num_features);
-  x->x_example_phase = (double)0.0;
-  x->x_label_phase = (double)0.0;
+  x->x_example_phase = (t_float)0.0;
+  x->x_label_phase = (t_float)0.0;
   x->x_batch_index = 0;
   x->x_features_filled = 0;
 }
 
 // not used
-static void set_phase_representation(t_nnlfo *x, t_symbol *_s, int _argc, t_atom *argv) {
+static void set_phase_representation(t_nnlfofl *x, t_symbol *_s, int _argc, t_atom *argv) {
   t_symbol *phase_type = atom_getsymbol(argv++);
   if (phase_type == gensym("linear")) {
     x->x_phase_rep = PHASE_LINEAR;
@@ -901,84 +840,71 @@ static void set_phase_representation(t_nnlfo *x, t_symbol *_s, int _argc, t_atom
   }
 }
 
-static void set_alpha(t_nnlfo *x, t_floatarg f) {
+static void set_alpha(t_nnlfofl *x, t_floatarg f) {
   x->x_alpha = f;
 }
 
-static void set_beta_1(t_nnlfo *x, t_floatarg f) {
+static void set_beta_1(t_nnlfofl *x, t_floatarg f) {
   x->x_beta_1 = f;
 }
 
-static void set_beta_2(t_nnlfo *x, t_floatarg f) {
+static void set_beta_2(t_nnlfofl *x, t_floatarg f) {
   x->x_beta_2 = f;
 }
 
-static void set_leak(t_nnlfo *x, t_floatarg f) {
+static void set_leak(t_nnlfofl *x, t_floatarg f) {
   x->x_leak = f;
 }
 
-static void set_lambda(t_nnlfo *x, t_floatarg f) {
+static void set_lambda(t_nnlfofl *x, t_floatarg f) {
   x->x_lambda = (f < (t_float)0.0) ? (t_float)0.0 : f;
 }
 
-static void set_batch_size(t_nnlfo *x, t_floatarg f) {
+static void set_batch_size(t_nnlfofl *x, t_floatarg f) {
   f = f > 0 ? f : 8;
   x->x_batch_size = f;
 }
 
-static void set_example_pw(t_nnlfo *x, t_floatarg f) {
+static void set_example_pw(t_nnlfofl *x, t_floatarg f) {
   f = (f > (t_float)1.0) ? (t_float)1.0 : (f < (t_float)0.0) ? (t_float)0.0 : f;
   x->x_example_pw = f;
 }
 
-static void set_label_pw(t_nnlfo *x, t_floatarg f) {
+static void set_label_pw(t_nnlfofl *x, t_floatarg f) {
   f = (f > (t_float)1.0) ? (t_float)1.0 : (f < (t_float)0.0) ? (t_float)0.0 : f;
   x->x_label_pw = f;
 }
 
-static void toggle_freeze(t_nnlfo *x) {
+static void toggle_freeze(t_nnlfofl *x) {
   x->x_freeze = (x->x_freeze == 0) ? 1 : 0;
-  post("nnlfo~: freeze toggled to %d", x->x_freeze);
+  post("nnlfofl~: freeze toggled to %d", x->x_freeze);
 }
 
-static void toggle_param_distortion(t_nnlfo *x) {
-  x->x_param_distortion_enabled = (x->x_param_distortion_enabled == 0) ? 1 : 0;
-  post("nnlfo~: param distortion toggled to %d", x->x_param_distortion_enabled);
-}
-
-static void set_param_distortion_scale(t_nnlfo *x, t_floatarg f) {
-  x->x_param_distortion_scale = f;
-}
-
-void nnlfo_tilde_setup(void) {
-  nnlfo_class = class_new(gensym("nnlfo~"),
-                          (t_newmethod)nnlfo_new,
-                          (t_method)nnlfo_free,
-                          sizeof(t_nnlfo),
+void nnlfofl_tilde_setup(void) {
+  nnlfofl_class = class_new(gensym("nnlfofl~"),
+                          (t_newmethod)nnlfofl_new,
+                          (t_method)nnlfofl_free,
+                          sizeof(t_nnlfofl),
                           CLASS_DEFAULT,
                           0);
-  class_addmethod(nnlfo_class, (t_method)nnlfo_dsp, gensym("dsp"), A_CANT, 0);
-  class_addmethod(nnlfo_class, (t_method)reset_model, gensym("reset"), 0);
-  class_addmethod(nnlfo_class, (t_method)set_alpha, gensym("alpha"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)set_leak, gensym("leak"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)set_lambda, gensym("lambda"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)set_beta_1, gensym("beta_1"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)set_beta_2, gensym("beta_2"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)set_batch_size, gensym("batch_size"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)set_example_pw, gensym("example_pw"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)set_label_pw, gensym("label_pw"), A_FLOAT, 0);
-  class_addmethod(nnlfo_class, (t_method)toggle_freeze, gensym("toggle_freeze"), 0);
-  class_addmethod(nnlfo_class, (t_method)toggle_param_distortion, gensym("toggle_distortion"), 0);
-  class_addmethod(nnlfo_class, (t_method)set_param_distortion_scale,
-                  gensym("distortion_scale"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)nnlfofl_dsp, gensym("dsp"), A_CANT, 0);
+  class_addmethod(nnlfofl_class, (t_method)reset_model, gensym("reset"), 0);
+  class_addmethod(nnlfofl_class, (t_method)set_alpha, gensym("alpha"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)set_leak, gensym("leak"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)set_lambda, gensym("lambda"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)set_beta_1, gensym("beta_1"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)set_beta_2, gensym("beta_2"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)set_batch_size, gensym("batch_size"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)set_example_pw, gensym("example_pw"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)set_label_pw, gensym("label_pw"), A_FLOAT, 0);
+  class_addmethod(nnlfofl_class, (t_method)toggle_freeze, gensym("toggle_freeze"), 0);
 
-  class_addmethod(nnlfo_class, (t_method)set_phase_representation, gensym("phase_representation"),
+  class_addmethod(nnlfofl_class, (t_method)set_phase_representation, gensym("phase_representation"),
                   A_SYMBOL, 0);
-  CLASS_MAINSIGNALIN(nnlfo_class, t_nnlfo, x_f);
+  CLASS_MAINSIGNALIN(nnlfofl_class, t_nnlfofl, x_f);
 }
 
-static void nnlfo_free(t_nnlfo *x) {
-  noisetable_free();
+static void nnlfofl_free(t_nnlfofl *x) {
   if (x->x_example_freq_inlet) inlet_free(x->x_example_freq_inlet);
   if (x->x_label_freq_inlet) inlet_free(x->x_label_freq_inlet);
   if (x->x_prediction_outlet) outlet_free(x->x_prediction_outlet);
@@ -1019,7 +945,7 @@ static void nnlfo_free(t_nnlfo *x) {
   }
 }
 
-static void set_layer_dims(t_nnlfo *x) {
+static void set_layer_dims(t_nnlfofl *x) {
   // hardcoded for now
   x->x_layer_dims[0] = x->x_num_features;
   x->x_layer_dims[1] = x->x_num_features * 2;
@@ -1041,7 +967,7 @@ static float he_init(int n_prev) {
   return standard_normal * (t_float)(sqrt(2.0 / n_prev));
 }
 
-static void init_layer_weights(t_nnlfo *x, int l) {
+static void init_layer_weights(t_nnlfofl *x, int l) {
   t_layer *layer = &x->x_layers[l];
   int size = layer->l_n * layer->l_n_prev;
   for (int i = 0; i < size; i++) {
@@ -1050,7 +976,7 @@ static void init_layer_weights(t_nnlfo *x, int l) {
   }
 }
 
-static void init_layer_biases(t_nnlfo *x, int l) {
+static void init_layer_biases(t_nnlfofl *x, int l) {
   t_layer *layer = &x->x_layers[l];
   for (int i = 0; i < layer->l_n; i++) {
     // not technically needed
@@ -1058,10 +984,10 @@ static void init_layer_biases(t_nnlfo *x, int l) {
   }
 }
 
-static void initialize_layers(t_nnlfo *x) {
+static void initialize_layers(t_nnlfofl *x) {
   x->x_layers = (t_layer *)getbytes(sizeof(t_layer) * x->x_num_layers);
   if (!x->x_layers) {
-    pd_error(x, "nnlfo~: failed to allocate memory for layers");
+    pd_error(x, "nnlfofl~: failed to allocate memory for layers");
     return;
   }
 
@@ -1080,62 +1006,62 @@ static void initialize_layers(t_nnlfo *x) {
 
     layer->l_weights = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
     if (!layer->l_weights) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer weights");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer weights");
       return;
     }
     layer->l_dw = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
     if (!layer->l_dw) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer dw");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer dw");
       return;
     }
     layer->l_v_dw = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
     if (!layer->l_v_dw) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer v_dw");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer v_dw");
       return;
     }
     layer->l_s_dw = (t_float *)getbytes(sizeof(t_float) * layer->l_n * layer->l_n_prev);
     if (!layer->l_s_dw) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer s_dw");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer s_dw");
       return;
     }
     layer->l_biases = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_biases) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer biases");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer biases");
       return;
     }
     layer->l_db = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_db) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer db");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer db");
       return;
     }
     layer->l_v_db = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_v_db) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer v_db");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer v_db");
       return;
     }
     layer->l_s_db = (t_float *)getbytes(sizeof(t_float) * layer->l_n);
     if (!layer->l_s_db) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer s_db");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer s_db");
       return;
     }
     layer->l_z_cache = (t_float *)getbytes(sizeof(t_float) * layer->l_n * batch_size);
     if (!layer->l_z_cache) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer z_cache");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer z_cache");
       return;
     }
     layer->l_dz = (t_float *)getbytes(sizeof(t_float) * layer->l_n * batch_size);
     if (!layer->l_dz) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer dz");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer dz");
       return;
     }
     layer->l_a_cache = (t_float *)getbytes(sizeof(t_float) * layer->l_n * batch_size);
     if (!layer->l_a_cache) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer a_cache");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer a_cache");
       return;
     }
     layer->l_da = (t_float *)getbytes(sizeof(t_float) * layer->l_n * batch_size);
     if (!layer->l_da) {
-      pd_error(x, "nnlfo~: failed to allocate memory for layer da");
+      pd_error(x, "nnlfofl~: failed to allocate memory for layer da");
       return;
     }
 

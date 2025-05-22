@@ -1,0 +1,164 @@
+let SessionLoad = 1
+let s:so_save = &g:so | let s:siso_save = &g:siso | setg so=0 siso=0 | setl so=-1 siso=-1
+let v:this_session=expand("<sfile>:p")
+silent only
+silent tabonly
+cd ~/projects/pd_externals/pd-nn-audio
+if expand('%') == '' && !&modified && line('$') <= 1 && getline(1) == ''
+  let s:wipebuf = bufnr('%')
+endif
+let s:shortmess_save = &shortmess
+if &shortmess =~ 'A'
+  set shortmess=aoOA
+else
+  set shortmess=aoO
+endif
+badd +955 src/nnlfo~.c
+badd +734 ~/obsidian/claude/nnlfo_batch_size.md
+badd +1758 ~/obsidian/claude/flatted_array_intuitions.md
+badd +1104 ~/projects/pd_externals/pd-model-full/src/nnseq.c
+badd +464 ~/obsidian/claude/nnlfo_adam_optimization.md
+badd +674 src/nn4~.c
+badd +882 src/nnpulse3~.c
+badd +886 src/nnlfofl~.c
+badd +8 Makefile
+badd +279 ~/projects/pd_externals/pd-my-del/src/stereotaps2~.c
+badd +383 ~/obsidian/claude/nnlfo_add_noise_to_params.md
+badd +62 ~/projects/pd_externals/pd-oscillators/src/modern_osc~.c
+badd +800 ~/obsidian/claude/lorenz_system.md
+badd +1 src/lorenz~.c
+badd +49 ~/projects/pd_externals/polybang_external/polybang/polybang.c
+badd +368 /usr/local/include/m_pd.h
+badd +126 src/lorenz_z~.c
+badd +1 ~/projects/pd_externals/pd-my-del/simple_delwrite~.pd_linux
+badd +32 ~/projects/pd_externals/pd-my-del/src/delay~.c
+badd +110 src/lorenz_y~.c
+badd +35 ~/obsidian/claude/lorenz_systems_continued.md
+badd +85 src/lorenzrk4~.c
+badd +56 ~/projects/pd_externals/pd-iemmatrix/src/mtx_mul~.c
+badd +376 ~/obsidian/claude/duffing_equation.md
+badd +136 src/duffing~.c
+badd +82 src/duffingeuler~.c
+badd +9 src/duffingcosf~.c
+badd +35 ~/projects/pd_externals/pd-sandh/src/shold~.c
+badd +146 ../pd-sandh/src/edgebang~.c
+badd +648 ~/projects/pd_externals/pure-data/extra/bonk~/bonk~.c
+badd +564 ~/obsidian/claude/edge_detection.md
+badd +3 ~/projects/pd_externals/pd-sandh/Makefile
+badd +442 ~/obsidian/claude/double_pendulum.md
+badd +201 src/doublependulum~.c
+badd +55 ~/obsidian/claude/claude_opus_4_test.md
+badd +665 ~/nvim_plugins/converse.nvim/lua/converse/prompts.lua
+argglobal
+%argdel
+edit src/lorenz~.c
+let s:save_splitbelow = &splitbelow
+let s:save_splitright = &splitright
+set splitbelow splitright
+wincmd _ | wincmd |
+vsplit
+wincmd _ | wincmd |
+vsplit
+2wincmd h
+wincmd w
+wincmd w
+let &splitbelow = s:save_splitbelow
+let &splitright = s:save_splitright
+wincmd t
+let s:save_winminheight = &winminheight
+let s:save_winminwidth = &winminwidth
+set winminheight=0
+set winheight=1
+set winminwidth=0
+set winwidth=1
+exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 2resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 3resize ' . ((&columns * 113 + 170) / 341)
+argglobal
+balt src/doublependulum~.c
+setlocal foldmethod=manual
+setlocal foldexpr=0
+setlocal foldmarker={{{,}}}
+setlocal foldignore=#
+setlocal foldlevel=0
+setlocal foldminlines=1
+setlocal foldnestmax=20
+setlocal foldenable
+silent! normal! zE
+let &fdl = &fdl
+let s:l = 175 - ((36 * winheight(0) + 30) / 60)
+if s:l < 1 | let s:l = 1 | endif
+keepjumps exe s:l
+normal! zt
+keepjumps 175
+normal! 075|
+wincmd w
+argglobal
+if bufexists(fnamemodify("src/doublependulum~.c", ":p")) | buffer src/doublependulum~.c | else | edit src/doublependulum~.c | endif
+if &buftype ==# 'terminal'
+  silent file src/doublependulum~.c
+endif
+balt ~/nvim_plugins/converse.nvim/lua/converse/prompts.lua
+setlocal foldmethod=manual
+setlocal foldexpr=0
+setlocal foldmarker={{{,}}}
+setlocal foldignore=#
+setlocal foldlevel=0
+setlocal foldminlines=1
+setlocal foldnestmax=20
+setlocal foldenable
+silent! normal! zE
+let &fdl = &fdl
+let s:l = 201 - ((29 * winheight(0) + 30) / 60)
+if s:l < 1 | let s:l = 1 | endif
+keepjumps exe s:l
+normal! zt
+keepjumps 201
+normal! 0
+wincmd w
+argglobal
+if bufexists(fnamemodify("~/obsidian/claude/claude_opus_4_test.md", ":p")) | buffer ~/obsidian/claude/claude_opus_4_test.md | else | edit ~/obsidian/claude/claude_opus_4_test.md | endif
+if &buftype ==# 'terminal'
+  silent file ~/obsidian/claude/claude_opus_4_test.md
+endif
+balt ~/obsidian/claude/double_pendulum.md
+setlocal foldmethod=manual
+setlocal foldexpr=0
+setlocal foldmarker={{{,}}}
+setlocal foldignore=#
+setlocal foldlevel=0
+setlocal foldminlines=1
+setlocal foldnestmax=20
+setlocal foldenable
+silent! normal! zE
+let &fdl = &fdl
+let s:l = 65 - ((26 * winheight(0) + 30) / 60)
+if s:l < 1 | let s:l = 1 | endif
+keepjumps exe s:l
+normal! zt
+keepjumps 65
+normal! 0
+wincmd w
+2wincmd w
+exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 2resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 3resize ' . ((&columns * 113 + 170) / 341)
+tabnext 1
+if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
+  silent exe 'bwipe ' . s:wipebuf
+endif
+unlet! s:wipebuf
+set winheight=1 winwidth=20
+let &shortmess = s:shortmess_save
+let &winminheight = s:save_winminheight
+let &winminwidth = s:save_winminwidth
+let s:sx = expand("<sfile>:p:r")."x.vim"
+if filereadable(s:sx)
+  exe "source " . fnameescape(s:sx)
+endif
+let &g:so = s:so_save | let &g:siso = s:siso_save
+set hlsearch
+nohlsearch
+doautoall SessionLoadPost
+unlet SessionLoad
+" vim: set ft=vim :
