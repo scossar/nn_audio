@@ -26,7 +26,7 @@ badd +279 ~/projects/pd_externals/pd-my-del/src/stereotaps2~.c
 badd +383 ~/obsidian/claude/nnlfo_add_noise_to_params.md
 badd +62 ~/projects/pd_externals/pd-oscillators/src/modern_osc~.c
 badd +800 ~/obsidian/claude/lorenz_system.md
-badd +1 src/lorenz~.c
+badd +175 src/lorenz~.c
 badd +49 ~/projects/pd_externals/polybang_external/polybang/polybang.c
 badd +368 /usr/local/include/m_pd.h
 badd +126 src/lorenz_z~.c
@@ -45,22 +45,20 @@ badd +146 ../pd-sandh/src/edgebang~.c
 badd +648 ~/projects/pd_externals/pure-data/extra/bonk~/bonk~.c
 badd +564 ~/obsidian/claude/edge_detection.md
 badd +3 ~/projects/pd_externals/pd-sandh/Makefile
-badd +442 ~/obsidian/claude/double_pendulum.md
-badd +201 src/doublependulum~.c
-badd +55 ~/obsidian/claude/claude_opus_4_test.md
+badd +481 ~/obsidian/claude/double_pendulum.md
+badd +1 src/doublependulum~.c
+badd +65 ~/obsidian/claude/claude_opus_4_test.md
 badd +665 ~/nvim_plugins/converse.nvim/lua/converse/prompts.lua
+badd +72 ~/obsidian/claude/double_pendulum_equations.md
 argglobal
 %argdel
-edit src/lorenz~.c
+edit src/doublependulum~.c
 let s:save_splitbelow = &splitbelow
 let s:save_splitright = &splitright
 set splitbelow splitright
 wincmd _ | wincmd |
 vsplit
-wincmd _ | wincmd |
-vsplit
-2wincmd h
-wincmd w
+1wincmd h
 wincmd w
 let &splitbelow = s:save_splitbelow
 let &splitright = s:save_splitright
@@ -71,33 +69,9 @@ set winminheight=0
 set winheight=1
 set winminwidth=0
 set winwidth=1
-exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
-exe 'vert 2resize ' . ((&columns * 113 + 170) / 341)
-exe 'vert 3resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 1resize ' . ((&columns * 170 + 170) / 341)
+exe 'vert 2resize ' . ((&columns * 170 + 170) / 341)
 argglobal
-balt src/doublependulum~.c
-setlocal foldmethod=manual
-setlocal foldexpr=0
-setlocal foldmarker={{{,}}}
-setlocal foldignore=#
-setlocal foldlevel=0
-setlocal foldminlines=1
-setlocal foldnestmax=20
-setlocal foldenable
-silent! normal! zE
-let &fdl = &fdl
-let s:l = 175 - ((36 * winheight(0) + 30) / 60)
-if s:l < 1 | let s:l = 1 | endif
-keepjumps exe s:l
-normal! zt
-keepjumps 175
-normal! 075|
-wincmd w
-argglobal
-if bufexists(fnamemodify("src/doublependulum~.c", ":p")) | buffer src/doublependulum~.c | else | edit src/doublependulum~.c | endif
-if &buftype ==# 'terminal'
-  silent file src/doublependulum~.c
-endif
 balt ~/nvim_plugins/converse.nvim/lua/converse/prompts.lua
 setlocal foldmethod=manual
 setlocal foldexpr=0
@@ -109,17 +83,17 @@ setlocal foldnestmax=20
 setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 201 - ((29 * winheight(0) + 30) / 60)
+let s:l = 172 - ((24 * winheight(0) + 30) / 60)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 201
-normal! 0
+keepjumps 172
+normal! 04|
 wincmd w
 argglobal
-if bufexists(fnamemodify("~/obsidian/claude/claude_opus_4_test.md", ":p")) | buffer ~/obsidian/claude/claude_opus_4_test.md | else | edit ~/obsidian/claude/claude_opus_4_test.md | endif
+if bufexists(fnamemodify("~/obsidian/claude/double_pendulum_equations.md", ":p")) | buffer ~/obsidian/claude/double_pendulum_equations.md | else | edit ~/obsidian/claude/double_pendulum_equations.md | endif
 if &buftype ==# 'terminal'
-  silent file ~/obsidian/claude/claude_opus_4_test.md
+  silent file ~/obsidian/claude/double_pendulum_equations.md
 endif
 balt ~/obsidian/claude/double_pendulum.md
 setlocal foldmethod=manual
@@ -132,17 +106,15 @@ setlocal foldnestmax=20
 setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 65 - ((26 * winheight(0) + 30) / 60)
+let s:l = 126 - ((34 * winheight(0) + 30) / 60)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 65
+keepjumps 126
 normal! 0
 wincmd w
-2wincmd w
-exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
-exe 'vert 2resize ' . ((&columns * 113 + 170) / 341)
-exe 'vert 3resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 1resize ' . ((&columns * 170 + 170) / 341)
+exe 'vert 2resize ' . ((&columns * 170 + 170) / 341)
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
   silent exe 'bwipe ' . s:wipebuf
