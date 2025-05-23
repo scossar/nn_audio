@@ -32,7 +32,6 @@ typedef struct _doublependulum {
   t_float x_conv;
   t_float x_f;
 
-
   t_outlet *x_theta1_x_outlet;
   t_outlet *x_theta1_y_outlet;
   t_outlet *x_theta2_x_outlet;
@@ -69,29 +68,43 @@ static void wavetable_free(void) {
   if (table_reference_count <= 0 && cos_table != NULL) {
     freebytes(cos_table, sizeof(float) * WAVETABLE_SIZE);
     cos_table = NULL;
-    post("duffing~: freed cosine table");
+    post("doublependulum~: freed cosine table");
     table_reference_count = 0; // just to be safe
   }
 }
 
-static void *doublependulum_new(void) {
+static void *doublependulum_new(t_symbol *s, int argc, t_atom *argv) {
   t_doublependulum *x = (t_doublependulum *)pd_new(doublependulum_class);
 
-  x->x_theta1 = (t_float)((t_float)M_PI / (t_float)2.0);
-  x->x_theta2 = x->x_theta1;
+  t_float theta1, theta2;
+  if (argc < 2) {
+    // both pendulums at 90 degrees
+    theta1 = (t_float)((t_float)M_PI / (t_float)2.0);
+    theta2 = theta1;
+  } else {
+    theta1 = atom_getfloat(argv++);
+    theta2 = atom_getfloat(argv++);
+  }
+  x->x_theta1 = theta1;
+  x->x_theta2 = theta2;
+
+  // pendulums are initially at rest
   x->x_w1 = (t_float)0.0;
   x->x_w2 = (t_float)0.0;
 
+  // for the reset function
   x->x_theta1_init = x->x_theta1;
   x->x_theta2_init = x->x_theta2;
   x->x_w1_init = x->x_w1;
   x->x_w2_init = x->x_w2;
 
+  // the constants can be set with messages
   x->x_L1 = (t_float)1.0;
   x->x_L2 = x->x_L1;
   x->x_m1 = (t_float)1.0;
   x->x_m2 = x->x_m1;
 
+  // not configurable for now
   x->x_g = (t_float)9.81;
 
   x->x_recip2pi = (t_float)1.0 / (t_float)((t_float)2.0 * (t_float)M_PI);
@@ -305,6 +318,20 @@ static void doublependulum_dsp(t_doublependulum *x, t_signal **sp) {
           sp[0]->s_length);
 }
 
+static void set_lengths(t_doublependulum *x, t_floatarg l1, t_floatarg l2) {
+  l1 = (l1 > 0) ? l1 : (t_float)1.0;
+  l2 = (l2 > 0) ? l2 : (t_float)1.0;
+  x->x_L1 = l1;
+  x->x_L2 = l2;
+}
+
+static void set_masses(t_doublependulum *x, t_floatarg m1, t_floatarg m2) {
+  m1 = (m1 > 0) ? m1 : (t_float)1.0;
+  m2 = (m2 > 0) ? m2 : (t_float)1.0;
+  x->x_m1 = m1;
+  x->x_m2 = m2;
+}
+
 static void reset(t_doublependulum *x) {
   x->x_theta1 = x->x_theta1_init;
   x->x_theta2 = x->x_theta2_init;
@@ -318,9 +345,13 @@ void doublependulum_tilde_setup(void) {
                                    (t_method)doublependulum_free,
                                    sizeof(t_doublependulum),
                                    CLASS_DEFAULT,
-                                   0);
+                                   A_GIMME, 0);
   class_addmethod(doublependulum_class, (t_method)doublependulum_dsp, gensym("dsp"), A_CANT, 0);
   class_addmethod(doublependulum_class, (t_method)reset, gensym("reset"), 0);
+  class_addmethod(doublependulum_class, (t_method)set_lengths, gensym("lengths"),
+                  A_FLOAT, A_FLOAT, 0);
+  class_addmethod(doublependulum_class, (t_method)set_masses, gensym("masses"),
+                  A_FLOAT, A_FLOAT, 0);
   CLASS_MAINSIGNALIN(doublependulum_class, t_doublependulum, x_f);
 }
 
