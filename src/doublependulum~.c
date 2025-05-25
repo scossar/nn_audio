@@ -6,6 +6,7 @@
  * notes:
  * - double_pendulum.md
  * - double_pendulum_equations.md
+ * - expanding_on_the_double_pendulum_system.md
  **/
 
 typedef struct _doublependulum {
@@ -36,6 +37,8 @@ typedef struct _doublependulum {
   t_outlet *x_theta1_y_outlet;
   t_outlet *x_theta2_x_outlet;
   t_outlet *x_theta2_y_outlet;
+  t_outlet *x_theta1_outlet;
+  t_outlet *x_theta2_outlet;
 
 } t_doublependulum;
 
@@ -116,6 +119,8 @@ static void *doublependulum_new(t_symbol *s, int argc, t_atom *argv) {
 
   x->x_recip2pi = (t_float)1.0 / (t_float)((t_float)2.0 * (t_float)M_PI);
 
+  x->x_theta2_outlet = outlet_new(&x->x_obj, &s_signal);
+  x->x_theta1_outlet = outlet_new(&x->x_obj, &s_signal);
   x->x_theta2_y_outlet = outlet_new(&x->x_obj, &s_signal);
   x->x_theta2_x_outlet = outlet_new(&x->x_obj, &s_signal);
   x->x_theta1_y_outlet = outlet_new(&x->x_obj, &s_signal);
@@ -131,6 +136,8 @@ static void doublependulum_free(t_doublependulum *x) {
   if (x->x_theta2_x_outlet) outlet_free(x->x_theta2_x_outlet);
   if (x->x_theta1_y_outlet) outlet_free(x->x_theta1_y_outlet);
   if (x->x_theta1_x_outlet) outlet_free(x->x_theta1_x_outlet);
+  if (x->x_theta1_outlet) outlet_free(x->x_theta1_outlet);
+  if (x->x_theta2_outlet) outlet_free(x->x_theta2_outlet);
 }
 
 static inline t_float fast_cos(t_doublependulum *x, t_float phase) {
@@ -254,6 +261,17 @@ static void compute_positions(t_doublependulum *x,
   t_float l1 = x->x_L1;
   t_float l2 = x->x_L2;
 
+  // note the use of `-l1` and `-l2` and the seemingly swapped use of sine and
+  // cosine
+  // in the unit circle: x = cos(theta); y = sin(theta); (angle from positive x
+  // axis)
+  // in pendulum systems: x = sin(theta); y = -cos(theta); (angle from downward
+  // vertical)
+  // this means that theta = 0 corresponds to a pendulum arm pointing straight
+  // down:
+  // x = L * sin(0) = 0;
+  // y = -L * cos(0) -L;
+  // see x_y_coordinates_from_angle.md
   *x1 = l1 * fast_sin(x, theta1);
   *y1 = -l1 * fast_cos(x, theta1);
   *x2 = *x1 + l2 * fast_sin(x, theta2);
@@ -267,7 +285,9 @@ static t_int *doublependulum_perform(t_int *w) {
   t_sample *out_theta1_y = (t_sample *)(w[4]);
   t_sample *out_theta2_x = (t_sample *)(w[5]);
   t_sample *out_theta2_y = (t_sample *)(w[6]);
-  int n = (int)(w[7]);
+  t_sample *out_theta1 = (t_sample *)(w[7]);
+  t_sample *out_theta2 = (t_sample *)(w[8]);
+  int n = (int)(w[9]);
 
   t_float conv = x->x_conv; // 1 / sample_rate
 
@@ -285,10 +305,16 @@ static t_int *doublependulum_perform(t_int *w) {
     t_float d_w1, d_w2;
     compute_derivatives(x, theta1, theta2, w1, w2, &d_w1, &d_w2);
 
-    theta1 += w1 * dt;
-    theta2 += w2 * dt;
+    // consider swapping the order to compute velocities (w1,w2) first
+    // that approach is called semi-implicit Euler (it conserves energy better,
+    // may increase numeric stability). it's as simple as just reordering the
+    // calculations below.
+    // note: I've made that change
     w1 += d_w1 * dt;
     w2 += d_w2 * dt;
+
+    theta1 += w1 * dt;
+    theta2 += w2 * dt;
 
     t_float x1, y1, x2, y2;
     compute_positions(x, theta1, theta2, &x1, &y1, &x2, &y2);
@@ -297,6 +323,8 @@ static t_int *doublependulum_perform(t_int *w) {
     *out_theta1_y++ = y1;
     *out_theta2_x++ = x2;
     *out_theta2_y++ = y2;
+    *out_theta1++ = theta1;
+    *out_theta2++ = theta2;
   }
 
   x->x_w1 = w1;
@@ -304,17 +332,19 @@ static t_int *doublependulum_perform(t_int *w) {
   x->x_theta1 = theta1;
   x->x_theta2 = theta2;
 
-  return (w+8);
+  return (w+10);
 }
 
 static void doublependulum_dsp(t_doublependulum *x, t_signal **sp) {
   x->x_conv = (t_float)((t_float)1.0 / sp[0]->s_sr);
-  dsp_add(doublependulum_perform, 7, x,
+  dsp_add(doublependulum_perform, 9, x,
           sp[0]->s_vec,
           sp[1]->s_vec,
           sp[2]->s_vec,
           sp[3]->s_vec,
           sp[4]->s_vec,
+          sp[5]->s_vec,
+          sp[6]->s_vec,
           sp[0]->s_length);
 }
 
