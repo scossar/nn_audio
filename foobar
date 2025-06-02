@@ -13,52 +13,28 @@ if &shortmess =~ 'A'
 else
   set shortmess=aoO
 endif
-badd +955 src/nnlfo~.c
-badd +734 ~/obsidian/claude/nnlfo_batch_size.md
-badd +1758 ~/obsidian/claude/flatted_array_intuitions.md
-badd +1104 ~/projects/pd_externals/pd-model-full/src/nnseq.c
-badd +464 ~/obsidian/claude/nnlfo_adam_optimization.md
-badd +674 src/nn4~.c
-badd +882 src/nnpulse3~.c
-badd +886 src/nnlfofl~.c
-badd +8 Makefile
-badd +279 ~/projects/pd_externals/pd-my-del/src/stereotaps2~.c
-badd +383 ~/obsidian/claude/nnlfo_add_noise_to_params.md
-badd +62 ~/projects/pd_externals/pd-oscillators/src/modern_osc~.c
-badd +800 ~/obsidian/claude/lorenz_system.md
-badd +175 src/lorenz~.c
-badd +49 ~/projects/pd_externals/polybang_external/polybang/polybang.c
-badd +368 /usr/local/include/m_pd.h
-badd +126 src/lorenz_z~.c
-badd +1 ~/projects/pd_externals/pd-my-del/simple_delwrite~.pd_linux
-badd +32 ~/projects/pd_externals/pd-my-del/src/delay~.c
-badd +110 src/lorenz_y~.c
-badd +35 ~/obsidian/claude/lorenz_systems_continued.md
-badd +85 src/lorenzrk4~.c
-badd +56 ~/projects/pd_externals/pd-iemmatrix/src/mtx_mul~.c
-badd +376 ~/obsidian/claude/duffing_equation.md
-badd +136 src/duffing~.c
-badd +82 src/duffingeuler~.c
-badd +9 src/duffingcosf~.c
-badd +35 ~/projects/pd_externals/pd-sandh/src/shold~.c
-badd +146 ../pd-sandh/src/edgebang~.c
-badd +648 ~/projects/pd_externals/pure-data/extra/bonk~/bonk~.c
-badd +564 ~/obsidian/claude/edge_detection.md
-badd +3 ~/projects/pd_externals/pd-sandh/Makefile
-badd +481 ~/obsidian/claude/double_pendulum.md
-badd +1 src/doublependulum~.c
-badd +65 ~/obsidian/claude/claude_opus_4_test.md
-badd +665 ~/nvim_plugins/converse.nvim/lua/converse/prompts.lua
-badd +72 ~/obsidian/claude/double_pendulum_equations.md
+badd +118 src/lorenz~.c
+badd +105 src/lorenzrk4~.c
+badd +121 src/rossler~.c
+badd +52 ~/obsidian/claude/understanding_the_lorenz_equations.md
+badd +252 src/lorenzattractor~.c
+badd +6 Makefile
+badd +155 src/lorenzattr~.c
+badd +178 ~/projects/pd_externals/pd-sandh/src/pulsenv~.c
+badd +118 src/chua~.c
+badd +261 ~/obsidian/claude/chua_circuit.md
 argglobal
 %argdel
-edit src/doublependulum~.c
+edit src/lorenzattr~.c
 let s:save_splitbelow = &splitbelow
 let s:save_splitright = &splitright
 set splitbelow splitright
 wincmd _ | wincmd |
 vsplit
-1wincmd h
+wincmd _ | wincmd |
+vsplit
+2wincmd h
+wincmd w
 wincmd w
 let &splitbelow = s:save_splitbelow
 let &splitright = s:save_splitright
@@ -69,10 +45,11 @@ set winminheight=0
 set winheight=1
 set winminwidth=0
 set winwidth=1
-exe 'vert 1resize ' . ((&columns * 170 + 170) / 341)
-exe 'vert 2resize ' . ((&columns * 170 + 170) / 341)
+exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 2resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 3resize ' . ((&columns * 113 + 170) / 341)
 argglobal
-balt ~/nvim_plugins/converse.nvim/lua/converse/prompts.lua
+balt src/rossler~.c
 setlocal foldmethod=manual
 setlocal foldexpr=0
 setlocal foldmarker={{{,}}}
@@ -83,38 +60,63 @@ setlocal foldnestmax=20
 setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 172 - ((24 * winheight(0) + 30) / 60)
+let s:l = 81 - ((14 * winheight(0) + 29) / 58)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 172
-normal! 04|
-wincmd w
-argglobal
-if bufexists(fnamemodify("~/obsidian/claude/double_pendulum_equations.md", ":p")) | buffer ~/obsidian/claude/double_pendulum_equations.md | else | edit ~/obsidian/claude/double_pendulum_equations.md | endif
-if &buftype ==# 'terminal'
-  silent file ~/obsidian/claude/double_pendulum_equations.md
-endif
-balt ~/obsidian/claude/double_pendulum.md
-setlocal foldmethod=manual
-setlocal foldexpr=0
-setlocal foldmarker={{{,}}}
-setlocal foldignore=#
-setlocal foldlevel=0
-setlocal foldminlines=1
-setlocal foldnestmax=20
-setlocal foldenable
-silent! normal! zE
-let &fdl = &fdl
-let s:l = 126 - ((34 * winheight(0) + 30) / 60)
-if s:l < 1 | let s:l = 1 | endif
-keepjumps exe s:l
-normal! zt
-keepjumps 126
+keepjumps 81
 normal! 0
 wincmd w
-exe 'vert 1resize ' . ((&columns * 170 + 170) / 341)
-exe 'vert 2resize ' . ((&columns * 170 + 170) / 341)
+argglobal
+if bufexists(fnamemodify("src/chua~.c", ":p")) | buffer src/chua~.c | else | edit src/chua~.c | endif
+if &buftype ==# 'terminal'
+  silent file src/chua~.c
+endif
+balt Makefile
+setlocal foldmethod=manual
+setlocal foldexpr=0
+setlocal foldmarker={{{,}}}
+setlocal foldignore=#
+setlocal foldlevel=0
+setlocal foldminlines=1
+setlocal foldnestmax=20
+setlocal foldenable
+silent! normal! zE
+let &fdl = &fdl
+let s:l = 63 - ((26 * winheight(0) + 29) / 58)
+if s:l < 1 | let s:l = 1 | endif
+keepjumps exe s:l
+normal! zt
+keepjumps 63
+normal! 028|
+wincmd w
+argglobal
+if bufexists(fnamemodify("~/obsidian/claude/chua_circuit.md", ":p")) | buffer ~/obsidian/claude/chua_circuit.md | else | edit ~/obsidian/claude/chua_circuit.md | endif
+if &buftype ==# 'terminal'
+  silent file ~/obsidian/claude/chua_circuit.md
+endif
+balt ~/obsidian/claude/understanding_the_lorenz_equations.md
+setlocal foldmethod=manual
+setlocal foldexpr=0
+setlocal foldmarker={{{,}}}
+setlocal foldignore=#
+setlocal foldlevel=0
+setlocal foldminlines=1
+setlocal foldnestmax=20
+setlocal foldenable
+silent! normal! zE
+let &fdl = &fdl
+let s:l = 119 - ((44 * winheight(0) + 29) / 58)
+if s:l < 1 | let s:l = 1 | endif
+keepjumps exe s:l
+normal! zt
+keepjumps 119
+normal! 03|
+wincmd w
+2wincmd w
+exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 2resize ' . ((&columns * 113 + 170) / 341)
+exe 'vert 3resize ' . ((&columns * 113 + 170) / 341)
 tabnext 1
 if exists('s:wipebuf') && len(win_findbuf(s:wipebuf)) == 0 && getbufvar(s:wipebuf, '&buftype') isnot# 'terminal'
   silent exe 'bwipe ' . s:wipebuf
