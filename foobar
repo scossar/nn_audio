@@ -15,17 +15,27 @@ else
 endif
 badd +118 src/lorenz~.c
 badd +105 src/lorenzrk4~.c
-badd +121 src/rossler~.c
+badd +96 src/rossler~.c
 badd +52 ~/obsidian/claude/understanding_the_lorenz_equations.md
 badd +252 src/lorenzattractor~.c
-badd +6 Makefile
-badd +155 src/lorenzattr~.c
+badd +3 Makefile
+badd +49 src/lorenzattr~.c
 badd +178 ~/projects/pd_externals/pd-sandh/src/pulsenv~.c
-badd +118 src/chua~.c
-badd +261 ~/obsidian/claude/chua_circuit.md
+badd +207 src/chua~.c
+badd +253 ~/obsidian/claude/chua_circuit.md
+badd +554 ~/obsidian/claude/chaus_circuit_review.md
+badd +1 src/chuaforce~.c
+badd +48 ~/obsidian/claude/forcing_chua_and_other_chaotic_systems.md
+badd +119 src/nnpulse~.c
+badd +124 src/henon~.c
+badd +116 ~/obsidian/claude/henon_map.md
+badd +69 src/updown~.c
+badd +102 ~/obsidian/claude/logistic_map.md
+badd +94 src/logistic~.c
+badd +119 src/clogistic~.c
 argglobal
 %argdel
-edit src/lorenzattr~.c
+edit src/logistic~.c
 let s:save_splitbelow = &splitbelow
 let s:save_splitright = &splitright
 set splitbelow splitright
@@ -49,7 +59,7 @@ exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
 exe 'vert 2resize ' . ((&columns * 113 + 170) / 341)
 exe 'vert 3resize ' . ((&columns * 113 + 170) / 341)
 argglobal
-balt src/rossler~.c
+balt src/henon~.c
 setlocal foldmethod=manual
 setlocal foldexpr=0
 setlocal foldmarker={{{,}}}
@@ -60,17 +70,17 @@ setlocal foldnestmax=20
 setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 81 - ((14 * winheight(0) + 29) / 58)
+let s:l = 98 - ((25 * winheight(0) + 30) / 60)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 81
-normal! 0
+keepjumps 98
+normal! 05|
 wincmd w
 argglobal
-if bufexists(fnamemodify("src/chua~.c", ":p")) | buffer src/chua~.c | else | edit src/chua~.c | endif
+if bufexists(fnamemodify("src/clogistic~.c", ":p")) | buffer src/clogistic~.c | else | edit src/clogistic~.c | endif
 if &buftype ==# 'terminal'
-  silent file src/chua~.c
+  silent file src/clogistic~.c
 endif
 balt Makefile
 setlocal foldmethod=manual
@@ -83,19 +93,19 @@ setlocal foldnestmax=20
 setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 63 - ((26 * winheight(0) + 29) / 58)
+let s:l = 100 - ((15 * winheight(0) + 30) / 60)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 63
-normal! 028|
+keepjumps 100
+normal! 0
 wincmd w
 argglobal
-if bufexists(fnamemodify("~/obsidian/claude/chua_circuit.md", ":p")) | buffer ~/obsidian/claude/chua_circuit.md | else | edit ~/obsidian/claude/chua_circuit.md | endif
+if bufexists(fnamemodify("~/obsidian/claude/logistic_map.md", ":p")) | buffer ~/obsidian/claude/logistic_map.md | else | edit ~/obsidian/claude/logistic_map.md | endif
 if &buftype ==# 'terminal'
-  silent file ~/obsidian/claude/chua_circuit.md
+  silent file ~/obsidian/claude/logistic_map.md
 endif
-balt ~/obsidian/claude/understanding_the_lorenz_equations.md
+balt ~/obsidian/claude/henon_map.md
 setlocal foldmethod=manual
 setlocal foldexpr=0
 setlocal foldmarker={{{,}}}
@@ -106,12 +116,12 @@ setlocal foldnestmax=20
 setlocal foldenable
 silent! normal! zE
 let &fdl = &fdl
-let s:l = 119 - ((44 * winheight(0) + 29) / 58)
+let s:l = 104 - ((54 * winheight(0) + 30) / 60)
 if s:l < 1 | let s:l = 1 | endif
 keepjumps exe s:l
 normal! zt
-keepjumps 119
-normal! 03|
+keepjumps 104
+normal! 0
 wincmd w
 2wincmd w
 exe 'vert 1resize ' . ((&columns * 113 + 170) / 341)
